@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { parseTranscription, WHISPER_MODEL, WHISPER_URL } from "@/lib/voice-transcribe";
+import { chooseTranscript, normalizeVoiceLanguage, parseTranscription, WHISPER_MODEL, WHISPER_URL } from "@/lib/voice-transcribe";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -9,12 +9,6 @@ const MAX_AUDIO_BYTES = 12 * 1024 * 1024;
 
 export async function POST(request: Request) {
   const key = process.env.NEAR_AI_CLOUD_API_KEY?.trim();
-  if (!key) {
-    return NextResponse.json(
-      { error: { code: "key_missing", message: "NEAR_AI_CLOUD_API_KEY is not set." } },
-      { status: 503 },
-    );
-  }
   let form: FormData;
   try {
     form = await request.formData();
@@ -28,7 +22,17 @@ export async function POST(request: Request) {
   if (audio.size > MAX_AUDIO_BYTES) {
     return NextResponse.json({ error: { code: "audio_too_large", message: "audio exceeds 12 MB." } }, { status: 413 });
   }
-  const language = form.get("language") === "bn" ? "bn" : "en";
+  const language = normalizeVoiceLanguage(form.get("language"));
+  const hintValue = form.get("hint");
+  const hint = typeof hintValue === "string" ? hintValue.trim() : "";
+  if (!key) {
+    const choice = chooseTranscript(null, "", hint);
+    return NextResponse.json({
+      text: choice.text,
+      fallback: true,
+      message: choice.message || "NEAR_AI_CLOUD_API_KEY is not set.",
+    });
+  }
   const outbound = new FormData();
   const filename = audio instanceof File && audio.name ? audio.name : "speech.webm";
   outbound.set("file", audio, filename);
@@ -42,18 +46,14 @@ export async function POST(request: Request) {
       signal: AbortSignal.timeout(TIMEOUT_MS),
     });
     const json = await response.json().catch(() => null);
-    if (!response.ok) {
-      return NextResponse.json(
-        { error: { code: "transcribe_failed", message: `Transcription failed (${response.status}).` } },
-        { status: 502 },
-      );
+    const cloudText = response.ok ? parseTranscription(json) : "";
+    if (!response.ok || !cloudText) {
+      const choice = chooseTranscript(response.status, cloudText, hint);
+      return NextResponse.json({ text: choice.text, fallback: true, message: choice.message });
     }
-    const text = parseTranscription(json);
-    if (!text) {
-      return NextResponse.json({ error: { code: "empty_transcript", message: "Transcription was empty." } }, { status: 502 });
-    }
-    return NextResponse.json({ text });
+    return NextResponse.json({ text: cloudText, fallback: false, message: "" });
   } catch {
-    return NextResponse.json({ error: { code: "transcribe_failed", message: "Transcription timed out." } }, { status: 502 });
+    const choice = chooseTranscript(null, "", hint);
+    return NextResponse.json({ text: choice.text, fallback: true, message: choice.message || "Transcription timed out." });
   }
 }

@@ -1,4 +1,15 @@
+import type { Lang } from "@/components/aegis/copy";
 import type { IntentAction, NetworkComponentStatus, VerifiedExecution } from "@/lib/dashboard-types";
+
+const DATE_LOCALE: Record<Lang, string> = {
+  en: "en-US",
+  bn: "bn-BD",
+  es: "es-ES",
+  ar: "ar-SA",
+  hi: "hi-IN",
+  fr: "fr-FR",
+  zh: "zh-CN",
+};
 
 const ASSETS: Record<string, { symbol: string; decimals: number }> = {
   "nep141:wrap.near": { symbol: "wNEAR", decimals: 24 },
@@ -43,10 +54,10 @@ export function timestampMs(timestampNs: string): number | null {
   }
 }
 
-export function formatTimestamp(timestampNs: string, lang: "en" | "bn"): string {
+export function formatTimestamp(timestampNs: string, lang: Lang): string {
   const ms = timestampMs(timestampNs);
   if (ms == null) return timestampNs;
-  return new Date(ms).toLocaleString(lang === "bn" ? "bn-BD" : "en-US", {
+  return new Date(ms).toLocaleString(DATE_LOCALE[lang], {
     month: "short",
     day: "2-digit",
     hour: "2-digit",
@@ -56,10 +67,10 @@ export function formatTimestamp(timestampNs: string, lang: "en" | "bn"): string 
   });
 }
 
-export function formatIso(iso: string, lang: "en" | "bn"): string {
+export function formatIso(iso: string, lang: Lang): string {
   const ms = Date.parse(iso);
   if (!Number.isFinite(ms)) return iso;
-  return new Date(ms).toLocaleString(lang === "bn" ? "bn-BD" : "en-US", {
+  return new Date(ms).toLocaleString(DATE_LOCALE[lang], {
     month: "short",
     day: "2-digit",
     year: "numeric",

@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { getAgentState, runDryRunPreview } from "@/lib/intents-agent";
-import { isTeeModel, readEnclaveTelemetry, runAttestedInference, TEE_MODELS } from "@/lib/near-ai-tee";
+import { isTeeModel, normalizeChatLocale, readEnclaveTelemetry, runAttestedInference, TEE_MODELS, type ChatLocale } from "@/lib/near-ai-tee";
 import type { LoaderStep } from "@/lib/chat-stream";
 
 export const runtime = "nodejs";
@@ -39,6 +39,7 @@ export async function POST(request: Request) {
     message,
     model: typeof record.model === "string" ? record.model : undefined,
     autoRedact: record.autoRedact !== false,
+    locale: normalizeChatLocale(record.locale),
     apiKey: callerKey(request),
   };
   if (record.stream === true) return streamChat(input);
@@ -50,7 +51,7 @@ export async function POST(request: Request) {
   }
 }
 
-async function streamChat(input: { message: string; model?: string; autoRedact: boolean; apiKey: string | null }) {
+async function streamChat(input: { message: string; model?: string; autoRedact: boolean; locale: ChatLocale; apiKey: string | null }) {
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
@@ -86,14 +87,14 @@ async function streamChat(input: { message: string; model?: string; autoRedact: 
   });
 }
 
-async function runChat(input: { message: string; model?: string; autoRedact: boolean; apiKey: string | null }) {
+async function runChat(input: { message: string; model?: string; autoRedact: boolean; locale: ChatLocale; apiKey: string | null }) {
   const attestation = await infer(input);
   const dryRun = attestation.decision.intent ? await runDryRunPreview(attestation.decision.intent) : null;
   return { attestation, dryRun };
 }
 
 async function infer(
-  input: { message: string; model?: string; autoRedact: boolean; apiKey: string | null },
+  input: { message: string; model?: string; autoRedact: boolean; locale: ChatLocale; apiKey: string | null },
   hooks?: { onStep?: (step: LoaderStep) => void; onDelta?: (text: string) => void },
 ) {
   const state = await getAgentState();
@@ -101,6 +102,7 @@ async function infer(
     userMessage: input.message,
     model: input.model,
     autoRedact: input.autoRedact,
+    locale: input.locale,
     apiKey: input.apiKey,
     policyContext: state.policy,
     balancesContext: state.balances,

@@ -9,6 +9,7 @@ import {
   assessProof,
   buildProofMessage,
   chainMatches,
+  connectedMayAct,
   coerceNetwork,
   decodeBase64,
   displayNetworkName,
@@ -68,6 +69,15 @@ describe("wallet proof helpers", () => {
     assert.equal(isOwnerSigned("", ""), false);
     assert.equal(isOwnerSigned("kotha-vault-1793945609.testnet", "kotha-vault-1793945609.testnet"), true);
     assert.equal(isOwnerSigned("other.testnet", "kotha-vault-1793945609.testnet"), false);
+    const previous = process.env.NEXT_PUBLIC_STRICT_OWNER;
+    process.env.NEXT_PUBLIC_STRICT_OWNER = "true";
+    assert.equal(connectedMayAct("mohina.near", "kotha-vault-1793945609.testnet"), false);
+    assert.equal(connectedMayAct("kotha-vault-1793945609.testnet", "kotha-vault-1793945609.testnet"), true);
+    process.env.NEXT_PUBLIC_STRICT_OWNER = "false";
+    assert.equal(connectedMayAct("mohina.near", "kotha-vault-1793945609.testnet"), true);
+    assert.equal(connectedMayAct("  ", "kotha-vault-1793945609.testnet"), false);
+    if (previous == null) delete process.env.NEXT_PUBLIC_STRICT_OWNER;
+    else process.env.NEXT_PUBLIC_STRICT_OWNER = previous;
   });
 
   it("opens a session for another wallet only when the owner is unlocked or the toggle is on", () => {

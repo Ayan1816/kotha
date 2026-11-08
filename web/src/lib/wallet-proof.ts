@@ -72,6 +72,16 @@ export function isOwnerSigned(accountId: string, expected = configuredOwnerId())
   return Boolean(owner) && accountId === owner;
 }
 
+export function strictOwnerMode(): boolean {
+  return process.env.NEXT_PUBLIC_STRICT_OWNER === "true";
+}
+
+export function connectedMayAct(accountId: string | null | undefined, expected = configuredOwnerId()): boolean {
+  const id = (accountId || "").trim();
+  if (strictOwnerMode()) return isOwnerSigned(id, expected);
+  return Boolean(id);
+}
+
 export function ownerActionsOpen(
   accountId: string | null | undefined,
   options: { sessionOwnerOptIn: boolean; ownerId?: string },

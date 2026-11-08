@@ -1,5 +1,6 @@
 "use client";
 
+import { useKothaSession } from "@/app/providers";
 import { DeckRequestError, fetchDashboard, fetchTeeCatalog, postDryRun, postExecute, postFreeze, postGrant, postPolicy, postSaveTx, postTeeChatStream } from "@/components/aegis/api";
 import type { ChainLink } from "@/components/aegis/audit-panel";
 import { CopilotPanel, type ChatMessage } from "@/components/aegis/copilot-panel";
@@ -10,16 +11,17 @@ import { SpendingGuard } from "@/components/aegis/spending-guard";
 import { TelemetryBar, type TeePhase } from "@/components/aegis/telemetry-bar";
 import { ShimmerActionButton } from "@/components/ui/aegis-primitives";
 import { invalidAmountReason } from "@/lib/budget-math";
-import type { LoaderStep } from "@/lib/chat-stream";
+import { displayReply, type LoaderStep } from "@/lib/chat-stream";
 import { resolveRemittance } from "@/lib/phone-resolver";
 import {
   chainMatches,
+  connectedMayAct,
   createWalletProof,
   executionViewCall,
-  isOwnerSigned,
-  networkBadgeLabel,
   parseFrozenReceiptJson,
+  proofUsesSessionOwner,
   publicContractId,
+  strictOwnerMode,
   txHashFromOutcome,
   walletRecordCall,
 } from "@/lib/wallet-proof";
@@ -71,16 +73,29 @@ export function CommandDeck() {
   const [remittanceLine, setRemittanceLine] = useState<string | null>(null);
   const [lastPrompt, setLastPrompt] = useState("");
   const near = useNearWallet();
+  const session = useKothaSession();
 
   const frozen = dashboard?.agentState.frozen ?? dashboard?.agentState.policy.frozen ?? false;
-  const ownerLock = isOwnerSigned(near.signedAccountId || "") ? null : translate(lang, "connectOwner");
+  const ownerLock = connectedMayAct(near.signedAccountId || "") ? null : translate(lang, "connectOwner");
   const thinking = busy === "chat";
 
   useEffect(() => {
-    document.documentElement.lang = lang === "bn" ? "bn" : "en";
+    document.documentElement.lang = lang;
+    document.documentElement.dir = lang === "ar" ? "rtl" : "ltr";
     document.documentElement.dataset.intensity = "obsidian";
     document.documentElement.dataset.frozen = frozen ? "true" : "false";
   }, [lang, frozen]);
+
+  useEffect(() => {
+    try {
+      const stored = window.localStorage.getItem("kotha-lang");
+      if (stored === "en" || stored === "bn" || stored === "es" || stored === "ar" || stored === "hi" || stored === "fr" || stored === "zh") {
+        setLang(stored);
+      }
+    } catch {
+      // First paint stays English when storage is blocked.
+    }
+  }, []);
 
   const refresh = useCallback(async () => {
     const next = await fetchDashboard();
@@ -150,7 +165,7 @@ export function CommandDeck() {
       const result = await run("chat", async () => {
         const started = Date.now();
         const value = await postTeeChatStream(
-          { message: text, model, autoRedact },
+          { message: text, model, autoRedact, locale: lang },
           {
             onStep: (step) => setChatStep(step),
             onDelta: (next) => setLiveText(next),
@@ -169,7 +184,7 @@ export function CommandDeck() {
         {
           id: crypto.randomUUID(),
           role: "assistant",
-          text: result.attestation.decision.explanation,
+          text: displayReply(result.attestation.decision.explanation),
           attestation: result.attestation,
           dryRun: invalid ? null : preview,
         },
@@ -203,10 +218,20 @@ export function CommandDeck() {
     }
   }
 
+  function chooseLang(next: Lang) {
+    setLang(next);
+    try {
+      window.localStorage.setItem("kotha-lang", next);
+    } catch {
+      // The in-memory language still applies to this page.
+    }
+  }
+
   async function ownerProof(action: string, payload: Record<string, unknown>) {
     const account = near.signedAccountId || "";
-    if (!isOwnerSigned(account)) throw new Error(translate(lang, "connectOwner"));
-    return createWalletProof((params) => near.signNEP413Message(params), action, payload, Date.now());
+    if (!connectedMayAct(account)) throw new Error(translate(lang, "connectOwner"));
+    const sessionOwner = proofUsesSessionOwner(account, { sessionOwnerOptIn: !strictOwnerMode() });
+    return createWalletProof((params) => near.signNEP413Message(params), action, payload, Date.now(), sessionOwner);
   }
 
   async function savePolicy(patch: PolicyPatch) {
@@ -288,7 +313,7 @@ export function CommandDeck() {
   async function execute() {
     if (!quote) return;
     try {
-      if (!isOwnerSigned(near.signedAccountId || "")) {
+      if (!connectedMayAct(near.signedAccountId || "")) {
         setNotice(translate(lang, "connectOwner"));
         return;
       }
@@ -375,7 +400,7 @@ export function CommandDeck() {
 
   return (
     <div className="min-h-screen bg-[#05070b]">
-      <TelemetryBar lang={lang} onLang={setLang} showTestnet={networkBadgeLabel() !== ""} />
+      <TelemetryBar lang={lang} onLang={chooseLang} />
       <main className="mx-auto w-full max-w-[1200px] px-6 pb-6 pt-[88px]">
         {frozen ? (
           <div className="mb-4 rounded-2xl border border-[#FF3B5C]/50 bg-[#FF3B5C]/15 px-4 py-3 text-center text-sm text-[#ffd0d8]">
@@ -410,7 +435,7 @@ export function CommandDeck() {
             </ShimmerActionButton>
           </div>
         ) : null}
-        <div role="tablist" aria-label={translate(lang, "brandMark")} className="mb-6 flex gap-2 overflow-x-auto pb-2">
+        <div role="tablist" aria-label={lang === "bn" ? translate(lang, "brandMark") : translate(lang, "brand")} className="mb-6 flex gap-2 overflow-x-auto pb-2">
           {tabs.map((item) => {
             const selected = tab === item.id;
             return (
@@ -441,6 +466,11 @@ export function CommandDeck() {
             teePhase={teePhase}
             onAutoRedact={setAutoRedact}
             onSend={(text) => void send(text)}
+            onDryRun={() => {
+              setTab("guard");
+              void refreshQuote();
+            }}
+            onOpenGuard={() => setTab("guard")}
           />
         ) : null}
         {dashboard && tab === "guard" ? (
@@ -468,6 +498,7 @@ export function CommandDeck() {
             executions={dashboard.executions}
             contractId={dashboard.vaultInfo.contractId}
             highlight={quote?.execution?.correlation_id || latestChain?.id || null}
+            network={session.network}
             onVerifyChain={verifyOnChain}
           />
         ) : null}

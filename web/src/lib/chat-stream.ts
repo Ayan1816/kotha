@@ -63,9 +63,72 @@ export function interpretChatBody(raw: string): unknown {
 
 export function partialExplanation(buffer: string): string {
   const assembled = assembleChatBody(buffer).content;
+  const reply = readJsonStringField(assembled, "reply") || readJsonStringField(buffer, "reply");
+  if (reply) return displayReply(reply);
   const fromContent = readJsonStringField(assembled, "explanation");
-  if (fromContent) return fromContent;
-  return readJsonStringField(buffer, "explanation");
+  if (fromContent) return displayReply(fromContent);
+  const fromBuffer = readJsonStringField(buffer, "explanation");
+  return fromBuffer ? displayReply(fromBuffer) : "";
+}
+
+export function displayReply(text: string): string {
+  const trimmed = text.trim();
+  if (!trimmed) return text;
+  const source = trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+  if (!source.startsWith("{") && !source.startsWith("[")) return text;
+  try {
+    const parsed = JSON.parse(source) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return text;
+    const record = parsed as Record<string, unknown>;
+    const reply = typeof record.reply === "string" ? record.reply.trim() : "";
+    const explanation = typeof record.explanation === "string" ? record.explanation.trim() : "";
+    const chosen = reply || explanation;
+    if (!chosen) return text;
+    if (chosen !== text && (chosen.startsWith("{") || chosen.startsWith("["))) {
+      const nested = displayReply(chosen);
+      if (nested !== chosen) return nested;
+    }
+    return chosen;
+  } catch {
+    const reply = readJsonStringField(source, "reply");
+    if (reply) return reply;
+    const explanation = readJsonStringField(source, "explanation");
+    return explanation || text;
+  }
+}
+
+export function readActionCard(text: string): { action: string; amount: number } | null {
+  const source = text.trim().replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
+  if (!source.startsWith("{")) return null;
+  try {
+    const record = JSON.parse(source) as Record<string, unknown>;
+    const nested = record.intent && typeof record.intent === "object" ? (record.intent as Record<string, unknown>) : null;
+    const action = typeof record.action === "string" ? record.action : typeof nested?.action === "string" ? nested.action : "";
+    const rawAmount = record.amount ?? nested?.amount;
+    const amount = typeof rawAmount === "number" ? rawAmount : Number(rawAmount);
+    if (!action || action === "none" || !Number.isFinite(amount) || amount <= 0) return null;
+    return { action, amount };
+  } catch {
+    return null;
+  }
+}
+
+export function parseSignedPayload(text: string): { requestHash: string | null; responseHash: string } | null {
+  const trimmed = text.trim().toLowerCase();
+  const pair = trimmed.match(/([0-9a-f]{64}):([0-9a-f]{64})$/);
+  if (pair?.[1] && pair[2]) return { requestHash: pair[1], responseHash: pair[2] };
+  const single = trimmed.match(/(?:^|[^0-9a-f])([0-9a-f]{64})$/);
+  if (single?.[1]) return { requestHash: null, responseHash: single[1] };
+  return null;
+}
+
+export function matchingResponseHash(signedHash: string, candidates: readonly string[]): string | null {
+  const target = signedHash.trim().toLowerCase();
+  if (!/^[0-9a-f]{64}$/.test(target)) return null;
+  for (const candidate of candidates) {
+    if (candidate && candidate.toLowerCase() === target) return target;
+  }
+  return null;
 }
 
 export function parseSseBlock(block: string): { event: string; data: unknown } | null {

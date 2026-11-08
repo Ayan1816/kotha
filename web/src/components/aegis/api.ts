@@ -72,7 +72,7 @@ export async function fetchTeeCatalog(): Promise<TeeCatalogResponse> {
   return data as TeeCatalogResponse;
 }
 
-export async function postTeeChat(body: { message: string; model: string; autoRedact: boolean }): Promise<TeeChatResponse> {
+export async function postTeeChat(body: { message: string; model: string; autoRedact: boolean; locale?: string }): Promise<TeeChatResponse> {
   const response = await fetch("/api/tee-chat", {
     method: "POST",
     headers: withNearAiKey({ "content-type": "application/json" }),
@@ -84,7 +84,7 @@ export async function postTeeChat(body: { message: string; model: string; autoRe
 }
 
 export async function postTeeChatStream(
-  body: { message: string; model: string; autoRedact: boolean },
+  body: { message: string; model: string; autoRedact: boolean; locale?: string },
   handlers: { onStep?: (step: LoaderStep) => void; onDelta?: (text: string) => void } = {},
 ): Promise<TeeChatResponse> {
   const response = await fetch("/api/tee-chat", {

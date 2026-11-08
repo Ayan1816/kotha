@@ -4,7 +4,7 @@ import { CopyButton, HashRow } from "@/components/aegis/bits";
 import { translate, type CopyKey, type Lang } from "@/components/aegis/copy";
 import { actionTone, amountSummary, formatTimestamp, getExecutionCommand, shortHash } from "@/components/aegis/format";
 import { judgeReceipt, readChainExecution, rehashReceipt } from "@/lib/receipt-canonical";
-import { explorerTxUrl } from "@/lib/wallet-proof";
+import { explorerTxUrl, publicNetwork } from "@/lib/wallet-proof";
 import { AnimatedNumberTicker, ShimmerActionButton, SpotlightGlassCard } from "@/components/ui/aegis-primitives";
 import type { AegisIntent, AttestedInference, DryRunPreview, ExecutionResult, VerifiedExecution } from "@/lib/dashboard-types";
 import { assetLabel } from "@/components/aegis/format";
@@ -196,12 +196,14 @@ export function ProofsTable({
   contractId,
   highlight,
   onVerifyChain,
+  network = publicNetwork(),
 }: {
   lang: Lang;
   executions: VerifiedExecution[];
   contractId: string;
   highlight: string | null;
   onVerifyChain: (correlationId: string, receiptHash?: string) => Promise<"match" | "mismatch">;
+  network?: "mainnet" | "testnet";
 }) {
   return (
     <div className="overflow-x-auto rounded-2xl border border-white/10 bg-[#07110d] shadow-[0_16px_40px_rgba(0,0,0,0.35)]">
@@ -231,6 +233,7 @@ export function ProofsTable({
                 row={row}
                 contractId={contractId}
                 highlight={highlight === row.correlation_id}
+                network={network}
                 onVerifyChain={onVerifyChain}
               />
             ))
@@ -247,17 +250,19 @@ function ProofRow({
   contractId,
   highlight,
   onVerifyChain,
+  network,
 }: {
   lang: Lang;
   row: VerifiedExecution;
   contractId: string;
   highlight: boolean;
   onVerifyChain: (correlationId: string, receiptHash?: string) => Promise<"match" | "mismatch">;
+  network: "mainnet" | "testnet";
 }) {
   const [chain, setChain] = useState<"idle" | "checking" | "match" | "mismatch">("idle");
   const [verifyDetail, setVerifyDetail] = useState("");
   const command = getExecutionCommand(contractId, row.correlation_id);
-  const txUrl = row.tx_hash ? explorerTxUrl(row.tx_hash) : "";
+  const txUrl = row.tx_hash ? explorerTxUrl(row.tx_hash, network) : "";
   return (
     <>
       <tr id={`exec-${row.correlation_id}`} className={`scroll-mt-24 border-b border-white/8 ${highlight ? "bg-[#00EC97]/10" : ""}`}>

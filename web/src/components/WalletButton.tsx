@@ -5,7 +5,7 @@ import { translate, type Lang } from "@/components/aegis/copy";
 import { useNearWallet } from "near-connect-hooks";
 import { useEffect, useRef, useState } from "react";
 
-const BOX = "h-9 min-w-36";
+const BOX = "h-9 px-3 text-sm";
 
 function shortAccount(id: string): string {
   if (id.length <= 16) return id;
@@ -19,15 +19,7 @@ function formatNear(yocto: bigint): string {
   return frac ? `${whole.toString()}.${frac} NEAR` : `${whole.toString()} NEAR`;
 }
 
-export function WalletButton({
-  lang,
-  onLang,
-  showTestnet,
-}: {
-  lang: Lang;
-  onLang: (lang: Lang) => void;
-  showTestnet: boolean;
-}) {
+export function WalletButton({ lang, network }: { lang: Lang; network: "mainnet" | "testnet" }) {
   const { signedAccountId, signIn, signOut, loading, getBalance } = useNearWallet();
   const [open, setOpen] = useState(false);
   const [balance, setBalance] = useState<string | null>(null);
@@ -63,7 +55,7 @@ export function WalletButton({
   }, [open, signedAccountId]);
 
   if (loading) {
-    return <div className={`${BOX} animate-pulse rounded-full bg-white/10`} aria-hidden="true" />;
+    return <div className="h-9 w-28 animate-pulse rounded-full bg-white/10" aria-hidden="true" />;
   }
 
   if (!signedAccountId) {
@@ -77,14 +69,17 @@ export function WalletButton({
             setError(connectError instanceof Error ? connectError.message : translate(lang, "walletConnectFailed"));
           });
         }}
-        className={`${BOX} rounded-full bg-[#00EC97] px-4 text-sm font-semibold text-[#04140d]`}
+        className={`${BOX} whitespace-nowrap rounded-full bg-[#00EC97] font-semibold text-[#04140d]`}
       >
         {translate(lang, "connectWallet")}
       </button>
     );
   }
 
-  const explorer = `https://testnet.nearblocks.io/address/${signedAccountId}`;
+  const explorer =
+    network === "mainnet"
+      ? `https://nearblocks.io/address/${signedAccountId}`
+      : `https://testnet.nearblocks.io/address/${signedAccountId}`;
 
   return (
     <div className="relative" ref={root}>
@@ -93,7 +88,7 @@ export function WalletButton({
         aria-expanded={open}
         aria-haspopup="menu"
         onClick={() => setOpen((current) => !current)}
-        className={`${BOX} inline-flex items-center justify-center gap-2 rounded-full border border-[#00EC97]/40 bg-[#00EC97]/10 px-3 text-sm text-[#d9ffe8]`}
+        className={`${BOX} inline-flex max-w-40 items-center justify-center gap-2 whitespace-nowrap rounded-full border border-[#00EC97]/40 bg-[#00EC97]/10 text-[#d9ffe8]`}
       >
         <span className="h-2 w-2 shrink-0 rounded-full bg-[#00EC97]" aria-hidden="true" />
         <span className="max-w-36 truncate">{shortAccount(signedAccountId)}</span>
@@ -103,23 +98,6 @@ export function WalletButton({
           role="menu"
           className="absolute right-0 z-50 mt-2 w-80 max-w-[calc(100vw-3rem)] space-y-3 rounded-2xl border border-white/10 bg-[#07110d] p-4 text-sm text-white shadow-[0_16px_40px_rgba(0,0,0,0.45)]"
         >
-          <div className="flex flex-wrap items-center gap-2 md:hidden">
-            {showTestnet ? (
-              <span className="rounded-full border border-amber-400/50 bg-amber-400/15 px-3 py-1 text-sm text-amber-200">
-                {translate(lang, "testnetBadge")}
-              </span>
-            ) : null}
-            <button
-              type="button"
-              aria-label={translate(lang, "langHint")}
-              onClick={() => onLang(lang === "bn" ? "en" : "bn")}
-              className="rounded-full border border-white/15 px-3 py-1 text-sm"
-            >
-              <span className={lang === "bn" ? "text-[#00EC97]" : "text-white/50"}>বাংলা</span>
-              <span className="px-1 text-white/30">/</span>
-              <span className={lang === "en" ? "text-[#00EC97]" : "text-white/50"}>EN</span>
-            </button>
-          </div>
           <div className="flex items-start justify-between gap-2">
             <p className="min-w-0 flex-1 break-all text-sm text-white">{signedAccountId}</p>
             <CopyButton value={signedAccountId} lang={lang} />

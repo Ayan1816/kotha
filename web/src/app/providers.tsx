@@ -1,6 +1,6 @@
 "use client";
 
-import { DEMO_OWNER_ID, publicNetwork } from "@/lib/wallet-proof";
+import { DEMO_OWNER_ID } from "@/lib/wallet-proof";
 import { NearProvider } from "near-connect-hooks";
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
@@ -18,6 +18,7 @@ type KothaSessionValue = {
 const KothaSessionContext = createContext<KothaSessionValue | null>(null);
 const DEMO_FLAG = "kotha-demo-owner-active";
 const OPT_IN = "kotha-use-connected-owner";
+const NETWORK_KEY = "kotha-network";
 
 export function useKothaSession(): KothaSessionValue {
   const value = useContext(KothaSessionContext);
@@ -26,16 +27,27 @@ export function useKothaSession(): KothaSessionValue {
 }
 
 export function Providers({ children }: { children: ReactNode }) {
-  const [network, setNetwork] = useState<KothaNetwork>(publicNetwork());
+  const [network, setNetworkState] = useState<KothaNetwork>("mainnet");
   const [demoAccountId, setDemoAccountIdState] = useState<string | null>(null);
   const [sessionOwnerOptIn, setSessionOwnerOptInState] = useState(false);
 
   useEffect(() => {
     try {
+      const stored = window.localStorage.getItem(NETWORK_KEY);
+      if (stored === "mainnet" || stored === "testnet") setNetworkState(stored);
       setDemoAccountIdState(window.sessionStorage.getItem(DEMO_FLAG) === "1" ? DEMO_OWNER_ID : null);
       setSessionOwnerOptInState(window.localStorage.getItem(OPT_IN) === "1");
     } catch {
       // Storage can be blocked. The menu still works for this page load.
+    }
+  }, []);
+
+  const setNetwork = useCallback((next: KothaNetwork) => {
+    setNetworkState(next);
+    try {
+      window.localStorage.setItem(NETWORK_KEY, next);
+    } catch {
+      // The in-memory network still applies to this page.
     }
   }, []);
 
@@ -61,7 +73,7 @@ export function Providers({ children }: { children: ReactNode }) {
   const config = useMemo(() => ({ network }), [network]);
   const value = useMemo(
     () => ({ network, setNetwork, demoAccountId, setDemoAccountId, sessionOwnerOptIn, setSessionOwnerOptIn }),
-    [network, demoAccountId, setDemoAccountId, sessionOwnerOptIn, setSessionOwnerOptIn],
+    [network, setNetwork, demoAccountId, setDemoAccountId, sessionOwnerOptIn, setSessionOwnerOptIn],
   );
 
   return (
