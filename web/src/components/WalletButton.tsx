@@ -1,180 +1,147 @@
 "use client";
 
-import { useKothaSession } from "@/app/providers";
+import { CopyButton } from "@/components/aegis/bits";
 import { translate, type Lang } from "@/components/aegis/copy";
-import { DEMO_OWNER_ID } from "@/lib/wallet-proof";
 import { useNearWallet } from "near-connect-hooks";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
-const NEAR_AI_STORAGE = "kotha-near-ai-key";
-const PREFERRED = [/hot|here/i, /meteor/i, /my[- ]?near/i];
+const BOX = "h-9 min-w-36";
 
-type WalletChoice = { id: string; name: string };
+function shortAccount(id: string): string {
+  if (id.length <= 16) return id;
+  return `${id.slice(0, 6)}…${id.slice(-4)}`;
+}
 
-export function WalletButton({ lang }: { lang: Lang }) {
-  const { signedAccountId, signOut, loading, connector } = useNearWallet();
-  const session = useKothaSession();
+function formatNear(yocto: bigint): string {
+  const scale = 10n ** 24n;
+  const whole = yocto / scale;
+  const frac = (yocto % scale).toString().padStart(24, "0").slice(0, 4).replace(/0+$/, "");
+  return frac ? `${whole.toString()}.${frac} NEAR` : `${whole.toString()} NEAR`;
+}
+
+export function WalletButton({
+  lang,
+  onLang,
+  showTestnet,
+}: {
+  lang: Lang;
+  onLang: (lang: Lang) => void;
+  showTestnet: boolean;
+}) {
+  const { signedAccountId, signIn, signOut, loading, getBalance } = useNearWallet();
   const [open, setOpen] = useState(false);
-  const [choices, setChoices] = useState<WalletChoice[]>([]);
+  const [balance, setBalance] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [apiKey, setApiKey] = useState("");
-
-  useEffect(() => {
-    try {
-      setApiKey(window.sessionStorage.getItem(NEAR_AI_STORAGE) || "");
-    } catch {
-      setApiKey("");
-    }
-  }, []);
+  const root = useRef<HTMLDivElement>(null);
+  const balanceReader = useRef(getBalance);
+  balanceReader.current = getBalance;
 
   useEffect(() => {
     if (!open) return;
+    function onPointer(event: MouseEvent) {
+      if (!root.current?.contains(event.target as Node)) setOpen(false);
+    }
+    document.addEventListener("mousedown", onPointer);
+    return () => document.removeEventListener("mousedown", onPointer);
+  }, [open]);
+
+  useEffect(() => {
+    if (!open || !signedAccountId) return;
     let live = true;
-    void connector.whenManifestLoaded
-      .catch(() => undefined)
-      .finally(() => {
-        if (!live) return;
-        setChoices(listChoices(connector.wallets));
+    setBalance(null);
+    void balanceReader
+      .current(signedAccountId)
+      .then((value) => {
+        if (live) setBalance(formatNear(value));
+      })
+      .catch(() => {
+        if (live) setBalance("—");
       });
     return () => {
       live = false;
     };
-  }, [open, connector]);
+  }, [open, signedAccountId]);
 
-  const account = session.demoAccountId || signedAccountId || "";
-  const label = loading
-    ? translate(lang, "walletLoading")
-    : account
-      ? `${translate(lang, "disconnectWallet")} ${account}`
-      : translate(lang, "connectWallet");
-
-  async function connectWallet(walletId?: string) {
-    setError(null);
-    session.setDemoAccountId(null);
-    try {
-      await connector.whenManifestLoaded.catch(() => undefined);
-      await connector.connect(walletId ? { walletId } : undefined);
-      setOpen(false);
-    } catch (connectError) {
-      setError(connectError instanceof Error ? connectError.message : translate(lang, "walletConnectFailed"));
-    }
+  if (loading) {
+    return <div className={`${BOX} animate-pulse rounded-full bg-white/10`} aria-hidden="true" />;
   }
 
-  return (
-    <div className="relative">
+  if (!signedAccountId) {
+    return (
       <button
         type="button"
-        disabled={loading}
-        title={label}
+        title={error || undefined}
+        onClick={() => {
+          setError(null);
+          void signIn().catch((connectError: unknown) => {
+            setError(connectError instanceof Error ? connectError.message : translate(lang, "walletConnectFailed"));
+          });
+        }}
+        className={`${BOX} rounded-full bg-[#00EC97] px-4 text-sm font-semibold text-[#04140d]`}
+      >
+        {translate(lang, "connectWallet")}
+      </button>
+    );
+  }
+
+  const explorer = `https://testnet.nearblocks.io/address/${signedAccountId}`;
+
+  return (
+    <div className="relative" ref={root}>
+      <button
+        type="button"
         aria-expanded={open}
         aria-haspopup="menu"
         onClick={() => setOpen((current) => !current)}
-        className="max-w-[16rem] truncate rounded-full border border-[#00EC97]/35 bg-[#00EC97]/10 px-3 py-1 font-mono text-[11px] text-[#d9ffe8] disabled:opacity-60"
+        className={`${BOX} inline-flex items-center justify-center gap-2 rounded-full border border-[#00EC97]/40 bg-[#00EC97]/10 px-3 text-sm text-[#d9ffe8]`}
       >
-        {label}
+        <span className="h-2 w-2 shrink-0 rounded-full bg-[#00EC97]" aria-hidden="true" />
+        <span className="max-w-36 truncate">{shortAccount(signedAccountId)}</span>
       </button>
       {open ? (
         <div
           role="menu"
-          aria-label={translate(lang, "walletMenu")}
-          className="absolute right-0 z-40 mt-2 w-72 space-y-2 rounded-2xl border border-white/15 bg-[#07110d]/95 p-3 text-left shadow-[0_16px_50px_rgba(0,0,0,0.45)]"
+          className="absolute right-0 z-50 mt-2 w-80 max-w-[calc(100vw-3rem)] space-y-3 rounded-2xl border border-white/10 bg-[#07110d] p-4 text-sm text-white shadow-[0_16px_40px_rgba(0,0,0,0.45)]"
         >
-          <button type="button" className="block w-full rounded-lg px-2 py-1 text-left text-[12px] text-[#d9ffe8] hover:bg-white/5" onClick={() => void connectWallet()}>
-            {translate(lang, "connectSelector")}
-          </button>
-          {choices.map((choice) => (
-            <button
-              key={choice.id}
-              type="button"
-              className="block w-full truncate rounded-lg px-2 py-1 text-left text-[12px] text-white/80 hover:bg-white/5"
-              onClick={() => void connectWallet(choice.id)}
-            >
-              {choice.name}
-            </button>
-          ))}
-          {signedAccountId ? (
+          <div className="flex flex-wrap items-center gap-2 md:hidden">
+            {showTestnet ? (
+              <span className="rounded-full border border-amber-400/50 bg-amber-400/15 px-3 py-1 text-sm text-amber-200">
+                {translate(lang, "testnetBadge")}
+              </span>
+            ) : null}
             <button
               type="button"
-              className="block w-full rounded-lg px-2 py-1 text-left text-[12px] text-white/70 hover:bg-white/5"
-              onClick={() => {
-                session.setDemoAccountId(null);
-                void signOut();
-                setOpen(false);
-              }}
+              aria-label={translate(lang, "langHint")}
+              onClick={() => onLang(lang === "bn" ? "en" : "bn")}
+              className="rounded-full border border-white/15 px-3 py-1 text-sm"
             >
-              {translate(lang, "disconnectWallet")}
+              <span className={lang === "bn" ? "text-[#00EC97]" : "text-white/50"}>বাংলা</span>
+              <span className="px-1 text-white/30">/</span>
+              <span className={lang === "en" ? "text-[#00EC97]" : "text-white/50"}>EN</span>
             </button>
-          ) : null}
-          <label className="flex items-start gap-2 px-2 text-[11px] text-white/80">
-            <input
-              type="checkbox"
-              className="mt-0.5"
-              checked={session.sessionOwnerOptIn}
-              onChange={(event) => session.setSessionOwnerOptIn(event.target.checked)}
-            />
-            <span>{translate(lang, "useConnectedOwner")}</span>
-          </label>
+          </div>
+          <div className="flex items-start justify-between gap-2">
+            <p className="min-w-0 flex-1 break-all text-sm text-white">{signedAccountId}</p>
+            <CopyButton value={signedAccountId} lang={lang} />
+          </div>
+          <p className="text-sm text-white/70">
+            {translate(lang, "nearBalance")} <span className="text-white">{balance ?? "…"}</span>
+          </p>
+          <a href={explorer} target="_blank" rel="noreferrer" className="block break-all text-sm text-[#7DD3FC] underline-offset-2 hover:underline">
+            {translate(lang, "viewOnExplorer")}
+          </a>
           <button
             type="button"
-            className="block w-full rounded-lg border border-amber-400/40 px-2 py-1 text-left text-[12px] text-amber-200 hover:bg-amber-400/10"
+            className="w-full rounded-xl border border-white/15 px-3 py-2 text-left text-sm text-white hover:bg-white/5"
             onClick={() => {
-              session.setDemoAccountId(DEMO_OWNER_ID);
-              setError(null);
               setOpen(false);
+              void signOut();
             }}
           >
-            {translate(lang, "demoOwnerSignIn")}
+            {translate(lang, "disconnectWallet")}
           </button>
-          <p className="px-2 text-[10px] leading-snug text-white/45">{translate(lang, "demoOwnerHint")}</p>
-          {session.demoAccountId ? (
-            <button type="button" className="block w-full px-2 text-left text-[11px] text-white/60" onClick={() => session.setDemoAccountId(null)}>
-              {translate(lang, "clearDemo")}
-            </button>
-          ) : null}
-          {error ? <p className="px-2 text-[11px] text-[#ffb3c0]">{error || translate(lang, "walletConnectFailed")}</p> : null}
-          <label className="block px-2 text-[10px] uppercase tracking-[0.12em] text-white/40">
-            {translate(lang, "nearAiKeyLabel")}
-            <input
-              type="password"
-              autoComplete="off"
-              value={apiKey}
-              title={translate(lang, "nearAiKeyHint")}
-              onChange={(event) => {
-                const next = event.target.value;
-                setApiKey(next);
-                try {
-                  if (next.trim()) window.sessionStorage.setItem(NEAR_AI_STORAGE, next.trim());
-                  else window.sessionStorage.removeItem(NEAR_AI_STORAGE);
-                } catch {
-                  // The typed key still sits in this control for the page load.
-                }
-              }}
-              className="mt-1 w-full rounded-lg border border-white/10 bg-black/40 px-2 py-1 font-mono text-[11px] normal-case tracking-normal text-white outline-none"
-            />
-          </label>
         </div>
       ) : null}
     </div>
   );
-}
-
-function listChoices(wallets: Array<{ manifest: { id: string; name: string; type: string } }>): WalletChoice[] {
-  const rows = wallets
-    .map((wallet) => ({ id: wallet.manifest.id, name: wallet.manifest.name || wallet.manifest.id, type: wallet.manifest.type }))
-    .filter((wallet) => wallet.id);
-  const picked: WalletChoice[] = [];
-  const seen = new Set<string>();
-  for (const pattern of PREFERRED) {
-    const match = rows.find((wallet) => pattern.test(`${wallet.id} ${wallet.name}`));
-    if (!match || seen.has(match.id)) continue;
-    seen.add(match.id);
-    picked.push({ id: match.id, name: match.name });
-  }
-  for (const wallet of rows) {
-    if (seen.has(wallet.id)) continue;
-    if (wallet.type !== "injected" && !/near/i.test(`${wallet.id} ${wallet.name}`)) continue;
-    seen.add(wallet.id);
-    picked.push({ id: wallet.id, name: wallet.name });
-  }
-  return picked.slice(0, 8);
 }

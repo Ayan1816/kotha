@@ -71,6 +71,7 @@ export function CopilotPanel({
   liveText,
   autoRedact,
   frozen,
+  teePhase = "idle",
   onAutoRedact,
   onSend,
 }: {
@@ -83,6 +84,7 @@ export function CopilotPanel({
   liveText: string;
   autoRedact: boolean;
   frozen: boolean;
+  teePhase?: "idle" | "unverified" | "verified";
   onAutoRedact: (next: boolean) => void;
   onSend: (text: string) => void;
 }) {
@@ -232,20 +234,27 @@ export function CopilotPanel({
     submit(HERO_BANGLA_SWAP);
   }
 
+  const teeLabel =
+    teePhase === "verified" ? translate(lang, "verifiedBadge") : teePhase === "unverified" ? translate(lang, "unverifiedBadge") : translate(lang, "teeReady");
+  const teeClass =
+    teePhase === "verified" ? "border-[#00EC97]/50 bg-[#00EC97]/15 text-[#b8ffe0]" : "border-[#FF8A00]/50 bg-[#FF8A00]/15 text-[#ffd7a1]";
+
   return (
-    <SpotlightGlassCard alert={frozen} className="flex min-h-[640px] flex-col xl:h-full xl:min-h-0">
-      <div className="flex h-full min-h-[640px] flex-col xl:min-h-0">
-        <div className="flex flex-wrap items-start justify-between gap-3 border-b border-white/8 px-4 py-3">
-          <div>
-            <h2 className="text-sm font-semibold leading-snug text-white">{translate(lang, "copilotTitle")}</h2>
-            <p className="mt-1 font-mono text-[10px] text-white/40">{model}</p>
-            <div className="mt-2">
-              <VoiceWaveform active={listening || demoWave} label={translate(lang, "voiceDemo")} />
+    <div className="flex min-h-[calc(100dvh-11rem)] flex-col gap-2">
+      <div className="flex justify-end">
+        <span title={teeLabel} className={cn("max-w-full rounded-full border px-3 py-1 text-sm", teeClass)}>
+          {teeLabel}
+        </span>
+      </div>
+      <SpotlightGlassCard alert={frozen} className="flex min-h-0 flex-1 flex-col">
+      <div className="flex h-full min-h-[calc(100dvh-14rem)] flex-col">
+        <details className="border-b border-white/10 px-4 py-3">
+          <summary className="cursor-pointer text-sm text-[#b8ffe0]">{translate(lang, "showDetails")}</summary>
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3" title={translate(lang, "autoRedactHint")}>
+            <div className="flex items-center gap-2">
+              <Shield className={`h-4 w-4 ${autoRedact ? "text-[#00EC97]" : "text-white/30"}`} />
+              <span className="text-sm text-white/80">{translate(lang, "autoRedact")}</span>
             </div>
-          </div>
-          <div className="flex items-center gap-2" title={translate(lang, "autoRedactHint")}>
-            <Shield className={`h-4 w-4 ${autoRedact ? "text-[#00EC97]" : "text-white/30"}`} />
-            <span className="max-w-[220px] text-[11px] text-white/70">{translate(lang, "autoRedact")}</span>
             <EnclaveSwitch
               checked={autoRedact}
               onChange={onAutoRedact}
@@ -253,34 +262,32 @@ export function CopilotPanel({
               hint={translate(lang, "autoRedactHint")}
             />
           </div>
-        </div>
-
-        <div className="grid grid-cols-1 gap-2 px-4 py-3 sm:grid-cols-2">
-          <div className="sm:col-span-2 text-[10px] uppercase tracking-[0.18em] text-white/40">{translate(lang, "demos")}</div>
-          {DEMO_PROMPTS.map((demo) => (
+          <p className="mt-3 break-all text-sm text-white/50">{model}</p>
+          <div className="mt-3 grid gap-2">
+            {DEMO_PROMPTS.map((demo) => (
+              <button
+                key={demo.text}
+                type="button"
+                title={translate(lang, demo.tip)}
+                disabled={thinking}
+                onClick={() => submit(demo.text)}
+                className="rounded-xl border border-white/10 bg-black/25 px-3 py-2 text-left text-sm text-white hover:border-[#00EC97]/40 disabled:opacity-50"
+              >
+                {translate(lang, demo.label)}
+              </button>
+            ))}
             <button
-              key={demo.text}
               type="button"
-              title={translate(lang, demo.tip)}
               disabled={thinking}
-              onClick={() => submit(demo.text)}
-              className="rounded-xl border border-white/10 bg-black/25 px-3 py-2 text-left hover:border-[#00EC97]/40 disabled:opacity-50"
+              onClick={speakBanglaDemo}
+              className="rounded-xl border border-[#00EC97]/40 bg-[#00EC97]/10 px-3 py-2 text-left text-sm font-semibold text-[#d9ffe8] disabled:opacity-50"
             >
-              <div className="text-[10px] uppercase tracking-[0.14em] text-[#00D2FF]">{translate(lang, demo.title)}</div>
-              <div className="mt-1 text-[12px] leading-snug text-white/85">{translate(lang, demo.label)}</div>
+              {translate(lang, "voiceDemo")}
             </button>
-          ))}
-          <button
-            type="button"
-            disabled={thinking}
-            onClick={speakBanglaDemo}
-            className="sm:col-span-2 rounded-xl border border-[#00EC97]/40 bg-[#00EC97]/10 px-3 py-2 text-left text-[12px] font-semibold text-[#d9ffe8] hover:bg-[#00EC97]/16 disabled:opacity-50"
-          >
-            {translate(lang, "voiceDemo")}
-          </button>
-        </div>
+          </div>
+        </details>
 
-        <div ref={scroller} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-2" aria-live="polite">
+        <div ref={scroller} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4" aria-live="polite">
           {messages.map((message) =>
             message.role === "user" ? (
               <div key={message.id} className="ml-8 rounded-2xl rounded-br-md border border-[#00D2FF]/25 bg-[#00D2FF]/8 px-3 py-2 text-sm text-white">
@@ -302,8 +309,13 @@ export function CopilotPanel({
           ) : null}
         </div>
 
+        {listening || demoWave ? (
+          <div className="px-4">
+            <VoiceWaveform active={listening || demoWave} label={translate(lang, "voiceDemo")} />
+          </div>
+        ) : null}
         <form
-          className="border-t border-white/8 p-3"
+          className="mt-auto border-t border-white/10 p-4"
           onSubmit={(event) => {
             event.preventDefault();
             submit(input);
@@ -351,7 +363,8 @@ export function CopilotPanel({
           {voiceNote ? <p className="mt-2 text-[11px] text-[#FFB020]">{voiceNote}</p> : null}
         </form>
       </div>
-    </SpotlightGlassCard>
+      </SpotlightGlassCard>
+    </div>
   );
 }
 
@@ -405,7 +418,7 @@ function AssistantBubble({ lang, message, baseUrl }: { lang: Lang; message: Chat
       </div>
       <p className="text-sm leading-relaxed text-white/90">{decision.explanation}</p>
       <details className="mt-3 rounded-xl border border-[#00EC97]/20 bg-[#00EC97]/5 px-3 py-2">
-        <summary className="cursor-pointer text-[12px] font-medium text-[#b8ffe0]">{translate(lang, "drawer")}</summary>
+        <summary className="cursor-pointer text-sm font-medium text-[#b8ffe0]">{translate(lang, "showDetails")}</summary>
         <div className="mt-2">
           <div className="mb-2 text-[11px] uppercase tracking-[0.14em] text-white/40">
             {translate(lang, "mode")} · {modeLabel(lang, attestation.mode)}

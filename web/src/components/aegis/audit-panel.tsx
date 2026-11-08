@@ -9,10 +9,8 @@ import { AnimatedNumberTicker, ShimmerActionButton, SpotlightGlassCard } from "@
 import type { AegisIntent, AttestedInference, DryRunPreview, ExecutionResult, VerifiedExecution } from "@/lib/dashboard-types";
 import { assetLabel } from "@/components/aegis/format";
 import { PhoneBook } from "@/components/aegis/phone-book";
-import { Download, Search } from "lucide-react";
-import { useMemo, useState } from "react";
-
-type AuditFilter = "all" | "swaps" | "confidential" | "transfers";
+import { Download } from "lucide-react";
+import { useState } from "react";
 
 export type ChainLink = { id: string; hash: string; receiptHash: string };
 
@@ -114,9 +112,8 @@ export function AuditPanel({
           {executeReason ? <p className="text-xs leading-relaxed text-[#ffb3c0]">{executeReason}</p> : <p className="text-[11px] text-white/45">{translate(lang, "executeHint")}</p>}
         </div>
       </SpotlightGlassCard>
-      <AuditStream
+      <ProofsTable
         lang={lang}
-        frozen={frozen}
         executions={executions}
         contractId={contractId}
         highlight={execution?.correlation_id ?? null}
@@ -126,7 +123,7 @@ export function AuditPanel({
   );
 }
 
-function QuoteBody({ lang, intent, dryRun, remittanceLine }: { lang: Lang; intent: AegisIntent; dryRun: DryRunPreview; remittanceLine: string | null }) {
+export function QuoteBody({ lang, intent, dryRun, remittanceLine }: { lang: Lang; intent: AegisIntent; dryRun: DryRunPreview; remittanceLine: string | null }) {
   const origin = assetLabel(intent.origin_asset);
   const destination = assetLabel(intent.destination_asset);
   const impact = dryRun.budgetImpact;
@@ -193,89 +190,58 @@ function Info({ label, value, ticker, wide }: { label: string; value: string; ti
   );
 }
 
-function AuditStream({
+export function ProofsTable({
   lang,
-  frozen,
   executions,
   contractId,
   highlight,
   onVerifyChain,
 }: {
   lang: Lang;
-  frozen: boolean;
   executions: VerifiedExecution[];
   contractId: string;
   highlight: string | null;
   onVerifyChain: (correlationId: string, receiptHash?: string) => Promise<"match" | "mismatch">;
 }) {
-  const [filter, setFilter] = useState<AuditFilter>("all");
-  const [query, setQuery] = useState("");
-  const visible = useMemo(() => {
-    const needle = query.trim().toLowerCase();
-    return executions.filter((row) => {
-      if (filter === "swaps" && row.action_type !== "swap") return false;
-      if (filter === "transfers" && row.action_type !== "transfer") return false;
-      if (filter === "confidential" && row.action_type !== "shield" && row.action_type !== "unshield") return false;
-      if (!needle) return true;
-      const origin = assetLabel(row.origin_asset).symbol.toLowerCase();
-      const destination = assetLabel(row.destination_asset).symbol.toLowerCase();
-      return [row.correlation_id, row.origin_asset, row.destination_asset, origin, destination].join(" ").toLowerCase().includes(needle);
-    });
-  }, [executions, filter, query]);
-
-  const tabs: Array<{ id: AuditFilter; key: "filterAll" | "filterSwaps" | "filterConfidential" | "filterTransfers" }> = [
-    { id: "all", key: "filterAll" },
-    { id: "swaps", key: "filterSwaps" },
-    { id: "confidential", key: "filterConfidential" },
-    { id: "transfers", key: "filterTransfers" },
-  ];
-
   return (
-    <SpotlightGlassCard alert={frozen}>
-      <div className="space-y-3 p-4">
-        <h2 className="text-sm font-semibold leading-snug text-white">{translate(lang, "auditTitle")}</h2>
-        <div className="flex flex-wrap gap-1">
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              type="button"
-              aria-pressed={filter === tab.id}
-              onClick={() => setFilter(tab.id)}
-              className={`rounded-full px-2.5 py-1 text-[11px] ${filter === tab.id ? "bg-[#00EC97] text-[#04140d]" : "bg-white/5 text-white/70"}`}
-            >
-              {translate(lang, tab.key)}
-            </button>
-          ))}
-        </div>
-        <label className="flex items-center gap-2 rounded-xl border border-white/10 bg-black/30 px-3 py-2">
-          <Search className="h-4 w-4 text-white/40" />
-          <input
-            value={query}
-            onChange={(event) => setQuery(event.target.value)}
-            placeholder={translate(lang, "search")}
-            aria-label={translate(lang, "search")}
-            className="w-full bg-transparent text-sm text-white outline-none placeholder:text-white/30"
-          />
-        </label>
-        <div className="space-y-2">
-          {visible.length === 0 ? <p className="text-sm text-white/50">{translate(lang, "empty")}</p> : null}
-          {visible.map((row) => (
-            <ExecutionCard
-              key={row.correlation_id}
-              lang={lang}
-              row={row}
-              contractId={contractId}
-              highlight={highlight === row.correlation_id}
-              onVerifyChain={onVerifyChain}
-            />
-          ))}
-        </div>
-      </div>
-    </SpotlightGlassCard>
+    <div className="overflow-x-auto rounded-2xl border border-white/10 bg-[#07110d] shadow-[0_16px_40px_rgba(0,0,0,0.35)]">
+      <table className="w-full min-w-[720px] border-collapse text-left">
+        <thead>
+          <tr className="border-b border-white/10 text-sm text-white/60">
+            <th className="px-4 py-3 font-medium">{translate(lang, "time")}</th>
+            <th className="px-4 py-3 font-medium">{translate(lang, "action")}</th>
+            <th className="px-4 py-3 font-medium">{translate(lang, "amount")}</th>
+            <th className="px-4 py-3 font-medium">{translate(lang, "status")}</th>
+            <th className="px-4 py-3 font-medium">{translate(lang, "txLink")}</th>
+            <th className="px-4 py-3 font-medium">{translate(lang, "verify")}</th>
+          </tr>
+        </thead>
+        <tbody>
+          {executions.length === 0 ? (
+            <tr>
+              <td colSpan={6} className="px-4 py-6 text-base text-white/60">
+                {translate(lang, "empty")}
+              </td>
+            </tr>
+          ) : (
+            executions.map((row) => (
+              <ProofRow
+                key={row.correlation_id}
+                lang={lang}
+                row={row}
+                contractId={contractId}
+                highlight={highlight === row.correlation_id}
+                onVerifyChain={onVerifyChain}
+              />
+            ))
+          )}
+        </tbody>
+      </table>
+    </div>
   );
 }
 
-function ExecutionCard({
+function ProofRow({
   lang,
   row,
   contractId,
@@ -288,65 +254,78 @@ function ExecutionCard({
   highlight: boolean;
   onVerifyChain: (correlationId: string, receiptHash?: string) => Promise<"match" | "mismatch">;
 }) {
-  const [verifyState, setVerifyState] = useState<"idle" | "checking" | "match" | "mismatch">("idle");
+  const [chain, setChain] = useState<"idle" | "checking" | "match" | "mismatch">("idle");
   const [verifyDetail, setVerifyDetail] = useState("");
   const command = getExecutionCommand(contractId, row.correlation_id);
   const txUrl = row.tx_hash ? explorerTxUrl(row.tx_hash) : "";
   return (
-    <article
-      id={`exec-${row.correlation_id}`}
-      className={`rounded-xl border bg-black/25 p-3 ${highlight ? "border-[#00EC97]/60" : "border-white/8"}`}
-    >
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <span className={`rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase ${actionTone(row.action_type)}`}>{row.action_type}</span>
-        <time className="font-mono text-[10px] text-white/45" dateTime={row.timestamp_ns}>
-          {formatTimestamp(row.timestamp_ns, lang)}
-        </time>
-      </div>
-      <div className="mt-2 font-mono text-sm text-white">{amountSummary(row)}</div>
-      <dl className="mt-2 space-y-1 text-[11px] text-white/55">
-        <MetaRow label={translate(lang, "correlation")} value={row.correlation_id} />
-        <MetaRow label={translate(lang, "chatLabel")} value={row.near_ai_chat_id} />
-        <MetaRow label={translate(lang, "address")} value={row.tee_signing_address} />
-      </dl>
-      <details className="mt-2">
-        <summary className="cursor-pointer text-[11px] text-[#b8ffe0]">{translate(lang, "proof")}</summary>
-        <HashRow lang={lang} label={translate(lang, "requestHash")} value={row.request_sha256} />
-        <HashRow lang={lang} label={translate(lang, "responseHash")} value={row.response_sha256} />
-        {row.receipt_hash ? <HashRow lang={lang} label={translate(lang, "receiptHash")} value={row.receipt_hash} /> : null}
-        <HashRow lang={lang} label={translate(lang, "signature")} value={row.tee_signature} />
-      </details>
-      {txUrl ? (
-        <a href={txUrl} target="_blank" rel="noreferrer" className="mt-2 block break-all font-mono text-[11px] text-[#7DD3FC] underline-offset-2 hover:underline">
-          {translate(lang, "explorer")} · {shortHash(row.tx_hash || "", 8, 6)}
-        </a>
-      ) : null}
-      <div className="mt-3 flex flex-col gap-2">
-        <CopyButton value={command} lang={lang} label={translate(lang, "cli")} className="justify-center py-2 text-[10px]" />
-        <button
-          type="button"
-          onClick={() => void downloadStoredReceipt(row.correlation_id)}
-          className="inline-flex items-center justify-center gap-2 whitespace-normal break-words rounded-md border border-white/10 px-2 py-2 text-center text-[10px] leading-snug text-white/75 hover:border-[#00D2FF]/40"
-        >
-          <Download className="h-3 w-3" />
-          {translate(lang, "receipt")}
-        </button>
-        <button
-          type="button"
-          onClick={() => void verifyStoredReceipt(lang, row.correlation_id, setVerifyState, setVerifyDetail)}
-          className="inline-flex items-center justify-center gap-2 whitespace-normal break-words rounded-md border border-white/10 px-2 py-2 text-center text-[10px] leading-snug text-white/75 hover:border-[#00EC97]/40"
-        >
-          {translate(lang, "verify")}
-          {verifyState === "match" ? ` · ${translate(lang, "verifyMatch")}` : ""}
-          {verifyState === "mismatch" ? ` · ${translate(lang, "verifyMismatch")}` : ""}
-          {verifyState === "checking" ? " · …" : ""}
-        </button>
-        <ChainVerifyButton lang={lang} onClick={() => onVerifyChain(row.correlation_id, row.receipt_hash)} />
-        {verifyDetail ? (
-          <p className={`break-words text-[11px] ${verifyState === "match" ? "text-[#00EC97]" : "text-[#ffb3c0]"}`}>{verifyDetail}</p>
-        ) : null}
-      </div>
-    </article>
+    <>
+      <tr id={`exec-${row.correlation_id}`} className={`scroll-mt-24 border-b border-white/8 ${highlight ? "bg-[#00EC97]/10" : ""}`}>
+        <td className="whitespace-nowrap px-4 py-3 text-sm text-white">{formatTimestamp(row.timestamp_ns, lang)}</td>
+        <td className="whitespace-nowrap px-4 py-3 text-sm text-white">{row.action_type}</td>
+        <td className="max-w-48 px-4 py-3 text-sm break-words text-white">{amountSummary(row)}</td>
+        <td className="whitespace-nowrap px-4 py-3 text-sm text-[#00EC97]">{translate(lang, "statusRecorded")}</td>
+        <td className="px-4 py-3 text-sm">
+          {txUrl ? (
+            <a href={txUrl} target="_blank" rel="noreferrer" className="text-[#7DD3FC] underline-offset-2 hover:underline">
+              {shortHash(row.tx_hash || "", 6, 4)}
+            </a>
+          ) : (
+            <span className="text-white/40">—</span>
+          )}
+        </td>
+        <td className="px-4 py-3 text-sm">
+          <button
+            type="button"
+            onClick={() => {
+              setChain("checking");
+              void onVerifyChain(row.correlation_id, row.receipt_hash)
+                .then(setChain)
+                .catch(() => setChain("mismatch"));
+            }}
+            className="rounded-xl border border-white/15 px-3 py-1 text-sm text-white hover:border-[#00EC97]/50"
+          >
+            {translate(lang, "verify")}
+            {chain === "checking" ? " …" : ""}
+          </button>
+          {chain === "match" ? <div className="mt-1 text-sm text-[#00EC97]">{translate(lang, "chainMatch")}</div> : null}
+          {chain === "mismatch" ? <div className="mt-1 text-sm text-[#ffb3c0]">{translate(lang, "chainMismatch")}</div> : null}
+        </td>
+      </tr>
+      <tr className="border-b border-white/8">
+        <td colSpan={6} className="px-4 py-2">
+          <details>
+            <summary className="cursor-pointer text-sm text-[#b8ffe0]">{translate(lang, "showDetails")}</summary>
+            <div className="mt-2 space-y-2">
+              <MetaRow label={translate(lang, "correlation")} value={row.correlation_id} />
+              <MetaRow label={translate(lang, "chatLabel")} value={row.near_ai_chat_id} />
+              <MetaRow label={translate(lang, "address")} value={row.tee_signing_address} />
+              <HashRow lang={lang} label={translate(lang, "requestHash")} value={row.request_sha256} />
+              <HashRow lang={lang} label={translate(lang, "responseHash")} value={row.response_sha256} />
+              {row.receipt_hash ? <HashRow lang={lang} label={translate(lang, "receiptHash")} value={row.receipt_hash} /> : null}
+              <HashRow lang={lang} label={translate(lang, "signature")} value={row.tee_signature} />
+              <CopyButton value={command} lang={lang} label={translate(lang, "cli")} />
+              <button
+                type="button"
+                onClick={() => void downloadStoredReceipt(row.correlation_id)}
+                className="inline-flex items-center gap-2 rounded-xl border border-white/15 px-3 py-2 text-sm text-white"
+              >
+                <Download className="h-4 w-4" />
+                {translate(lang, "receipt")}
+              </button>
+              <button
+                type="button"
+                onClick={() => void verifyStoredReceipt(lang, row.correlation_id, () => undefined, setVerifyDetail)}
+                className="ml-2 inline-flex items-center rounded-xl border border-white/15 px-3 py-2 text-sm text-white"
+              >
+                {translate(lang, "verify")}
+              </button>
+              {verifyDetail ? <p className="break-words text-sm text-white/80">{verifyDetail}</p> : null}
+            </div>
+          </details>
+        </td>
+      </tr>
+    </>
   );
 }
 

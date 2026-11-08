@@ -3,7 +3,7 @@
 import { CopyButton, FieldLabel } from "@/components/aegis/bits";
 import { translate, type Lang } from "@/components/aegis/copy";
 import { formatIso, shortHash } from "@/components/aegis/format";
-import { AnimatedNumberTicker, EnclaveSwitch, ShimmerActionButton, SpotlightGlassCard } from "@/components/ui/aegis-primitives";
+import { EnclaveSwitch, ShimmerActionButton, SpotlightGlassCard } from "@/components/ui/aegis-primitives";
 import type { ActivePolicy, PolicyPatch, PublicGrant } from "@/lib/dashboard-types";
 import { INTENT_ACTIONS } from "@/lib/dashboard-types";
 import { useEffect, useState } from "react";
@@ -25,12 +25,10 @@ export function PolicyPanel({
   policyBusy,
   rotateBusy,
   revokeBusy,
-  freezeBusy,
   ownerLock = null,
   onSave,
   onRotate,
   onRevoke,
-  onFreeze,
 }: {
   lang: Lang;
   policy: ActivePolicy;
@@ -40,12 +38,10 @@ export function PolicyPanel({
   policyBusy: boolean;
   rotateBusy: boolean;
   revokeBusy: boolean;
-  freezeBusy: boolean;
   ownerLock?: string | null;
   onSave: (patch: PolicyPatch) => Promise<void>;
   onRotate: () => void;
   onRevoke: () => void;
-  onFreeze: () => void;
 }) {
   const [draft, setDraft] = useState(policy);
   const [dirty, setDirty] = useState(false);
@@ -54,10 +50,6 @@ export function PolicyPanel({
     if (!dirty) setDraft(policy);
   }, [policy, dirty]);
 
-  const limit = draft.dailyBudgetUsd > 0 ? draft.dailyBudgetUsd : 1;
-  const spent = policy.spentTodayUsd;
-  const pct = Math.max(0, (spent / limit) * 100);
-  const remaining = Math.max(0, draft.dailyBudgetUsd - spent);
   const grantState = grant.revoked ? "revoked" : grant.active ? "active" : "expired";
 
   return (
@@ -65,27 +57,11 @@ export function PolicyPanel({
       <SpotlightGlassCard alert={frozen}>
         <div className="space-y-4 p-4">
           <div>
-            <h2 className="text-sm font-semibold leading-snug tracking-wide text-white">{translate(lang, "policyTitle")}</h2>
+            <h2 className="text-xl font-semibold leading-snug text-white">{translate(lang, "policyTitle")}</h2>
             <p className="mt-1 text-xs text-white/55" title={translate(lang, "policyHint")}>
               {translate(lang, "policyHint")}
             </p>
             {ownerLock ? <p className="mt-2 text-[11px] leading-snug text-amber-200/90">{translate(lang, "readOnly")}</p> : null}
-          </div>
-
-          <div className="flex items-center gap-4">
-            <BudgetRing percent={pct} frozen={frozen} />
-            <div className="min-w-0 flex-1 space-y-1">
-              <FieldLabel k="spentToday" lang={lang} />
-              <div className="text-2xl text-white">
-                <AnimatedNumberTicker value={spent} format="usd" />
-              </div>
-              <div className="text-xs text-white/50">
-                {translate(lang, "remaining")} <AnimatedNumberTicker value={remaining} format="usd" className="text-[#00EC97]" />
-              </div>
-              <div className="text-xs text-white/50">
-                <AnimatedNumberTicker value={pct} format="percent" maximumFractionDigits={1} />
-              </div>
-            </div>
           </div>
 
           <label className="block space-y-2">
@@ -208,7 +184,7 @@ export function PolicyPanel({
       <SpotlightGlassCard alert={frozen || grant.revoked}>
         <div className="space-y-3 p-4">
           <div>
-            <h2 className="text-sm font-semibold text-white">{translate(lang, "grantTitle")}</h2>
+            <h2 className="text-xl font-semibold text-white">{translate(lang, "grantTitle")}</h2>
             <p className="mt-1 text-xs text-white/50" title={translate(lang, "grantHint")}>
               {grant.label}
             </p>
@@ -266,46 +242,6 @@ export function PolicyPanel({
           </div>
         </div>
       </SpotlightGlassCard>
-
-      <span title={ownerLock || (frozen ? translate(lang, "unfreezeHint") : translate(lang, "freezeHint"))} className="block">
-        <ShimmerActionButton
-          variant="danger"
-          loading={freezeBusy}
-          disabled={Boolean(ownerLock)}
-          title={ownerLock || (frozen ? translate(lang, "unfreezeHint") : translate(lang, "freezeHint"))}
-          onClick={onFreeze}
-          className={frozen ? "animate-pulse" : ""}
-        >
-          {frozen ? translate(lang, "unfreeze") : translate(lang, "freeze")}
-        </ShimmerActionButton>
-      </span>
     </div>
-  );
-}
-
-function BudgetRing({ percent, frozen }: { percent: number; frozen: boolean }) {
-  const clamped = Math.max(0, Math.min(100, percent));
-  const radius = 46;
-  const circ = 2 * Math.PI * radius;
-  const color = frozen ? "#FF3B5C" : clamped >= 80 ? "#FF8A00" : "#00EC97";
-  return (
-    <svg viewBox="0 0 120 120" className="h-28 w-28 shrink-0" aria-hidden="true">
-      <circle cx="60" cy="60" r={radius} fill="none" stroke="rgba(255,255,255,0.08)" strokeWidth="8" />
-      <circle
-        cx="60"
-        cy="60"
-        r={radius}
-        fill="none"
-        stroke={color}
-        strokeWidth="8"
-        strokeLinecap="round"
-        strokeDasharray={circ}
-        strokeDashoffset={circ * (1 - clamped / 100)}
-        transform="rotate(-90 60 60)"
-      />
-      <text x="60" y="64" textAnchor="middle" fill="#f4fff9" fontSize="16" fontFamily="ui-monospace, monospace">
-        {clamped.toFixed(0)}%
-      </text>
-    </svg>
   );
 }

@@ -1,24 +1,24 @@
 "use client";
 
-import { useKothaSession } from "@/app/providers";
 import { DeckRequestError, fetchDashboard, fetchTeeCatalog, postDryRun, postExecute, postFreeze, postGrant, postPolicy, postSaveTx, postTeeChatStream } from "@/components/aegis/api";
 import type { ChainLink } from "@/components/aegis/audit-panel";
 import { CopilotPanel, type ChatMessage } from "@/components/aegis/copilot-panel";
-import { translate, type Intensity, type Lang } from "@/components/aegis/copy";
+import { translate, type Lang } from "@/components/aegis/copy";
+import { PhoneBook } from "@/components/aegis/phone-book";
 import { PolicyPanel } from "@/components/aegis/policy-panel";
+import { SpendingGuard } from "@/components/aegis/spending-guard";
 import { TelemetryBar, type TeePhase } from "@/components/aegis/telemetry-bar";
-import { AuroraEnclaveBackground, KothaStoryBanner, ShimmerActionButton } from "@/components/ui/aegis-primitives";
+import { ShimmerActionButton } from "@/components/ui/aegis-primitives";
 import { invalidAmountReason } from "@/lib/budget-math";
 import type { LoaderStep } from "@/lib/chat-stream";
-import { signDemoProof } from "@/lib/demo-signer";
 import { resolveRemittance } from "@/lib/phone-resolver";
 import {
   chainMatches,
   createWalletProof,
   executionViewCall,
-  ownerActionsOpen,
+  isOwnerSigned,
+  networkBadgeLabel,
   parseFrozenReceiptJson,
-  proofUsesSessionOwner,
   publicContractId,
   txHashFromOutcome,
   walletRecordCall,
@@ -38,7 +38,9 @@ import type {
 } from "@/lib/dashboard-types";
 import { useCallback, useEffect, useState } from "react";
 
-const AuditPanel = dynamic(() => import("@/components/aegis/audit-panel").then((mod) => mod.AuditPanel), { ssr: false });
+const ProofsTable = dynamic(() => import("@/components/aegis/audit-panel").then((mod) => mod.ProofsTable), { ssr: false });
+
+type TabId = "chat" | "guard" | "proofs" | "settings";
 
 type ArmedQuote = {
   intent: AegisIntent;
@@ -49,7 +51,7 @@ type ArmedQuote = {
 
 export function CommandDeck() {
   const [lang, setLang] = useState<Lang>("en");
-  const [intensity, setIntensity] = useState<Intensity>("obsidian");
+  const [tab, setTab] = useState<TabId>("chat");
   const [dashboard, setDashboard] = useState<DashboardResponse | null>(null);
   const [enclave, setEnclave] = useState<EnclaveTelemetry | null>(null);
   const [model, setModel] = useState<ChatModelId>("deepseek/deepseek-v3.2");
@@ -69,18 +71,16 @@ export function CommandDeck() {
   const [remittanceLine, setRemittanceLine] = useState<string | null>(null);
   const [lastPrompt, setLastPrompt] = useState("");
   const near = useNearWallet();
-  const session = useKothaSession();
-  const activeAccount = session.demoAccountId || near.signedAccountId || "";
 
   const frozen = dashboard?.agentState.frozen ?? dashboard?.agentState.policy.frozen ?? false;
-  const ownerLock = ownerActionsOpen(activeAccount, { sessionOwnerOptIn: session.sessionOwnerOptIn }) ? null : translate(lang, "connectOwner");
+  const ownerLock = isOwnerSigned(near.signedAccountId || "") ? null : translate(lang, "connectOwner");
   const thinking = busy === "chat";
 
   useEffect(() => {
     document.documentElement.lang = lang === "bn" ? "bn" : "en";
-    document.documentElement.dataset.intensity = intensity;
+    document.documentElement.dataset.intensity = "obsidian";
     document.documentElement.dataset.frozen = frozen ? "true" : "false";
-  }, [lang, intensity, frozen]);
+  }, [lang, frozen]);
 
   const refresh = useCallback(async () => {
     const next = await fetchDashboard();
@@ -204,11 +204,9 @@ export function CommandDeck() {
   }
 
   async function ownerProof(action: string, payload: Record<string, unknown>) {
-    const account = session.demoAccountId || near.signedAccountId || "";
-    if (!ownerActionsOpen(account, { sessionOwnerOptIn: session.sessionOwnerOptIn })) throw new Error(translate(lang, "connectOwner"));
-    if (session.demoAccountId) return signDemoProof(action, payload);
-    const sessionOwner = proofUsesSessionOwner(account, { sessionOwnerOptIn: session.sessionOwnerOptIn });
-    return createWalletProof((params) => near.signNEP413Message(params), action, payload, Date.now(), sessionOwner);
+    const account = near.signedAccountId || "";
+    if (!isOwnerSigned(account)) throw new Error(translate(lang, "connectOwner"));
+    return createWalletProof((params) => near.signNEP413Message(params), action, payload, Date.now());
   }
 
   async function savePolicy(patch: PolicyPatch) {
@@ -290,7 +288,7 @@ export function CommandDeck() {
   async function execute() {
     if (!quote) return;
     try {
-      if (!ownerActionsOpen(session.demoAccountId || near.signedAccountId, { sessionOwnerOptIn: session.sessionOwnerOptIn })) {
+      if (!isOwnerSigned(near.signedAccountId || "")) {
         setNotice(translate(lang, "connectOwner"));
         return;
       }
@@ -310,7 +308,7 @@ export function CommandDeck() {
       const wallet = await ownerProof("execute", payload);
       const result = await run("execute", () => postExecute(quote.intent, teeAttestation, wallet));
       setQuote((current) => (current ? { ...current, execution: result.execution, dryRun: result.execution.preview } : current));
-      if (result.simulated || session.demoAccountId || result.execution.remote_status === "simulated-demo") {
+      if (result.simulated || result.execution.remote_status === "simulated-demo") {
         setNotice(translate(lang, "demoSimulated"));
         await refresh();
         return;
@@ -368,41 +366,33 @@ export function CommandDeck() {
   const grant = dashboard?.agentState.grant;
   const reason = ownerLock || quoteError || blockReason(lang, frozen, grant, quote);
 
+  const tabs: Array<{ id: TabId; key: "tabChat" | "tabGuard" | "tabProofs" | "tabSettings" }> = [
+    { id: "chat", key: "tabChat" },
+    { id: "guard", key: "tabGuard" },
+    { id: "proofs", key: "tabProofs" },
+    { id: "settings", key: "tabSettings" },
+  ];
+
   return (
-    <div className="relative flex h-dvh min-h-screen flex-col overflow-hidden">
-      <AuroraEnclaveBackground frozen={frozen} thinking={thinking} />
-      <div className="relative z-10 mx-auto flex h-full w-full max-w-[1600px] flex-col gap-3 px-3 py-3 sm:px-5 sm:py-4">
-        <TelemetryBar
-          lang={lang}
-          intensity={intensity}
-          onLang={setLang}
-          onIntensity={setIntensity}
-          network={dashboard?.network ?? null}
-          enclave={enclave}
-          model={model}
-          onModel={setModel}
-          vault={dashboard?.vaultInfo ?? null}
-          balances={dashboard?.agentState.balances ?? null}
-          frozen={frozen}
-          teePhase={teePhase}
-        />
-        <KothaStoryBanner brand={translate(lang, "brand")} story={translate(lang, "story")} />
+    <div className="min-h-screen bg-[#05070b]">
+      <TelemetryBar lang={lang} onLang={setLang} showTestnet={networkBadgeLabel() !== ""} />
+      <main className="mx-auto w-full max-w-[1200px] px-6 pb-6 pt-[88px]">
         {frozen ? (
-          <div className="rounded-xl border border-[#FF3B5C]/50 bg-[#FF3B5C]/15 px-3 py-2 text-center text-xs font-semibold uppercase tracking-[0.22em] text-[#ffd0d8]">
+          <div className="mb-4 rounded-2xl border border-[#FF3B5C]/50 bg-[#FF3B5C]/15 px-4 py-3 text-center text-sm text-[#ffd0d8]">
             {translate(lang, "lockdown")}
           </div>
         ) : null}
         {notice ? (
-          <div className="flex items-start justify-between gap-3 rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-xs text-white/80">
-            <p>{notice}</p>
-            <button type="button" className="text-white/50" onClick={() => setNotice(null)} aria-label={translate(lang, "close")}>
+          <div className="mb-4 flex items-start justify-between gap-3 rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white/80">
+            <p className="min-w-0 break-words">{notice}</p>
+            <button type="button" className="text-base text-white/50" onClick={() => setNotice(null)} aria-label={translate(lang, "close")}>
               ×
             </button>
           </div>
         ) : null}
-        {!ready ? <p className="font-mono text-sm text-[#00EC97]">{translate(lang, "opening")}</p> : null}
+        {!ready ? <p className="mb-4 text-sm text-[#00EC97]">{translate(lang, "opening")}</p> : null}
         {loadError ? (
-          <div className="max-w-md space-y-3">
+          <div className="mb-4 max-w-md space-y-3">
             <p className="text-sm text-[#ffb3c0]">{loadError}</p>
             <ShimmerActionButton
               onClick={() => {
@@ -420,68 +410,97 @@ export function CommandDeck() {
             </ShimmerActionButton>
           </div>
         ) : null}
-        {dashboard ? (
-          <div className="grid min-h-0 flex-1 grid-cols-1 gap-3 overflow-y-auto xl:grid-cols-[minmax(300px,340px)_minmax(0,1fr)_minmax(320px,400px)] xl:overflow-hidden">
-            <section className="min-h-0 xl:overflow-y-auto xl:pr-1">
-              <PolicyPanel
-                lang={lang}
-                policy={dashboard.agentState.policy}
-                grant={dashboard.agentState.grant}
-                frozen={frozen}
-                revealedToken={revealedToken}
-                policyBusy={busy === "policy"}
-                rotateBusy={busy === "rotate"}
-                revokeBusy={busy === "revoke"}
-                freezeBusy={busy === "freeze"}
-                ownerLock={ownerLock}
-                onSave={savePolicy}
-                onRotate={() => void rotate()}
-                onRevoke={() => void revoke()}
-                onFreeze={() => void freeze()}
-              />
-            </section>
-            <section className="min-h-[680px] xl:min-h-0">
-              <CopilotPanel
-                lang={lang}
-                model={model}
-                baseUrl={enclave?.base_url || "https://cloud-api.near.ai/v1"}
-                messages={messages}
-                thinking={thinking}
-                chatStep={chatStep}
-                liveText={liveText}
-                autoRedact={autoRedact}
-                frozen={frozen}
-                onAutoRedact={setAutoRedact}
-                onSend={(text) => void send(text)}
-              />
-            </section>
-            <section className="min-h-0 xl:overflow-y-auto xl:pr-1">
-              <AuditPanel
-                lang={lang}
-                frozen={frozen}
-                intent={quote?.intent ?? null}
-                dryRun={quote?.dryRun ?? null}
-                attestation={quote?.attestation ?? null}
-                execution={quote?.execution ?? null}
-                executeReason={reason}
-                executeBusy={busy === "execute"}
-                quoteBusy={busy === "quote"}
-                quoteError={quoteError}
-                executions={dashboard.executions}
-                contractId={dashboard.vaultInfo.contractId}
-                chainLink={latestChain}
-                remittanceLine={remittanceLine}
-                onPhoneBookChange={() => {
-                  if (lastPrompt) void refreshRemittance(lastPrompt);
-                }}
-                onExecute={() => void execute()}
-                onRefresh={() => void refreshQuote()}
-                onVerifyChain={verifyOnChain}
-              />
-            </section>
+        <div role="tablist" aria-label={translate(lang, "brandMark")} className="mb-6 flex gap-2 overflow-x-auto pb-2">
+          {tabs.map((item) => {
+            const selected = tab === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                onClick={() => setTab(item.id)}
+                className={`shrink-0 rounded-full px-4 py-2 text-sm whitespace-nowrap ${selected ? "bg-[#00EC97] text-[#04140d]" : "bg-white/5 text-white/75"}`}
+              >
+                {translate(lang, item.key)}
+              </button>
+            );
+          })}
+        </div>
+        {tab === "chat" ? (
+          <CopilotPanel
+            lang={lang}
+            model={model}
+            baseUrl={enclave?.base_url || "https://cloud-api.near.ai/v1"}
+            messages={messages}
+            thinking={thinking}
+            chatStep={chatStep}
+            liveText={liveText}
+            autoRedact={autoRedact}
+            frozen={frozen}
+            teePhase={teePhase}
+            onAutoRedact={setAutoRedact}
+            onSend={(text) => void send(text)}
+          />
+        ) : null}
+        {dashboard && tab === "guard" ? (
+          <SpendingGuard
+            lang={lang}
+            policy={dashboard.agentState.policy}
+            frozen={frozen}
+            ownerLock={ownerLock}
+            quoteBusy={busy === "quote"}
+            executeBusy={busy === "execute"}
+            freezeBusy={busy === "freeze"}
+            intent={quote?.intent ?? null}
+            dryRun={quote?.dryRun ?? null}
+            remittanceLine={remittanceLine}
+            quoteError={quoteError}
+            executeReason={reason}
+            onDryRun={() => void refreshQuote()}
+            onExecute={() => void execute()}
+            onFreeze={() => void freeze()}
+          />
+        ) : null}
+        {dashboard && tab === "proofs" ? (
+          <ProofsTable
+            lang={lang}
+            executions={dashboard.executions}
+            contractId={dashboard.vaultInfo.contractId}
+            highlight={quote?.execution?.correlation_id || latestChain?.id || null}
+            onVerifyChain={verifyOnChain}
+          />
+        ) : null}
+        {dashboard && tab === "settings" ? (
+          <div className="space-y-4">
+            <PolicyPanel
+              lang={lang}
+              policy={dashboard.agentState.policy}
+              grant={dashboard.agentState.grant}
+              frozen={frozen}
+              revealedToken={revealedToken}
+              policyBusy={busy === "policy"}
+              rotateBusy={busy === "rotate"}
+              revokeBusy={busy === "revoke"}
+              ownerLock={ownerLock}
+              onSave={savePolicy}
+              onRotate={() => void rotate()}
+              onRevoke={() => void revoke()}
+            />
+            <details className="rounded-2xl border border-white/10 bg-[#07110d] p-4 shadow-[0_16px_40px_rgba(0,0,0,0.35)]">
+              <summary className="cursor-pointer text-sm text-[#b8ffe0]">{translate(lang, "showDetails")}</summary>
+              <div className="mt-4">
+                <PhoneBook
+                  lang={lang}
+                  onChange={() => {
+                    if (lastPrompt) void refreshRemittance(lastPrompt);
+                  }}
+                />
+              </div>
+            </details>
           </div>
         ) : null}
-      </div>
+      </main>
     </div>
   );
 }
