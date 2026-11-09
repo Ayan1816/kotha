@@ -1,4 +1,5 @@
 import { NextResponse } from "next/server";
+import { limitAiRequest } from "@/lib/ai-rate-limit";
 import { getAgentState, runDryRunPreview } from "@/lib/intents-agent";
 import { isTeeModel, normalizeChatLocale, readEnclaveTelemetry, runAttestedInference, TEE_MODELS, type ChatLocale } from "@/lib/near-ai-tee";
 import type { LoaderStep } from "@/lib/chat-stream";
@@ -34,6 +35,10 @@ export async function POST(request: Request) {
       { error: { code: "unsupported_model", message: "model is not in the TEE model list.", models: TEE_MODELS } },
       { status: 400 },
     );
+  }
+  const limited = await limitAiRequest(request);
+  if (!limited.ok) {
+    return NextResponse.json({ error: { code: limited.code, message: limited.message } }, { status: 429 });
   }
   const input = {
     message,

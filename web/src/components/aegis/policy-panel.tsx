@@ -188,7 +188,7 @@ export function PolicyPanel({
       <SpotlightGlassCard alert={frozen || grant.revoked}>
         <div className="space-y-3 p-4">
           <div>
-            <h2 className="text-xl font-semibold text-white">{translate(lang, "grantTitle")}</h2>
+            <h2 className="text-xl font-semibold text-white">{grantNotice || translate(lang, "grantTitle")}</h2>
             <p className="mt-1 text-xs text-white/50" title={translate(lang, "grantHint")}>
               {grant.label}
             </p>

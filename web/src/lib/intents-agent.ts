@@ -26,6 +26,7 @@ import fs from "fs";
 import { aegisStatePath, readTextFile, writeJsonFile } from "./aegis-paths";
 import { projectSpend, roundUsd, sumTodayReceiptUsd, utcDayStamp, ZERO_AMOUNT_WARNING } from "./budget-math";
 import { listReceiptRecords } from "./receipt-store";
+import { readTransferFields } from "./transfer-parse";
 
 export const AGENT_ID = "agent-kotha-prime.near";
 export const OWNER_ACCOUNT = "owner.kotha.testnet";
@@ -435,17 +436,18 @@ export function coerceIntent(value: unknown): AegisIntent | null {
   if (!record) return null;
   const action = record.action;
   if (!isAction(action)) return null;
-  const origin = canonicalAsset(stringValue(record.origin_asset));
+  const fields = readTransferFields(record, "");
+  const origin = canonicalAsset(stringValue(record.origin_asset)) || canonicalAsset(fields.token);
   const destinationRaw = stringValue(record.destination_asset);
-  const destination = canonicalAsset(destinationRaw || origin);
+  const destination = canonicalAsset(destinationRaw || origin || fields.token);
   return {
     action,
     origin_asset: origin,
     destination_asset: destination || origin,
-    amount: record.amount == null ? "0" : String(record.amount).replace(/,/g, ""),
+    amount: fields.amount || "0",
     amount_usd_estimate: finiteNumber(record.amount_usd_estimate, 0),
     max_slippage_bps: finiteNumber(record.max_slippage_bps, action === "swap" ? 50 : 0),
-    recipient: stringValue(record.recipient),
+    recipient: fields.recipient,
     chain: stringValue(record.chain) || "near",
     confidential: Boolean(record.confidential) || action === "shield",
   };

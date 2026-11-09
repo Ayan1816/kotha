@@ -1,4 +1,6 @@
 import { NextResponse } from "next/server";
+import { limitAiRequest } from "@/lib/ai-rate-limit";
+import { readVoiceDuration, VOICE_TOO_LONG_MESSAGE } from "@/lib/wav";
 import { normalizeVoiceLanguage, parseTranscription, WHISPER_MODEL, WHISPER_URL } from "@/lib/voice-transcribe";
 
 export const runtime = "nodejs";
@@ -28,11 +30,22 @@ export async function POST(request: Request) {
     console.error("voice-transcribe", "NEAR_AI_CLOUD_API_KEY is not set.");
     return NextResponse.json({ text: "", error: "NEAR_AI_CLOUD_API_KEY is not set." }, { status: 503 });
   }
+  const bytes = new Uint8Array(await audio.arrayBuffer());
+  if (!readVoiceDuration(bytes).ok) {
+    return NextResponse.json({ text: "", error: { code: "voice_too_long", message: VOICE_TOO_LONG_MESSAGE } }, { status: 413 });
+  }
+  const limited = await limitAiRequest(request);
+  if (!limited.ok) {
+    return NextResponse.json({ text: "", error: { code: limited.code, message: limited.message } }, { status: 429 });
+  }
   const outbound = new FormData();
-  const filename = audio instanceof File && audio.name ? audio.name : "speech.webm";
-  outbound.set("file", audio, filename);
+  const filename = audio instanceof File && audio.name ? audio.name : "audio.wav";
+  const type = audio.type || "audio/wav";
+  const file = new File([bytes], filename, { type });
+  outbound.set("file", file, filename);
   outbound.set("model", WHISPER_MODEL);
   outbound.set("language", language);
+  outbound.set("response_format", "json");
   try {
     const response = await fetch(WHISPER_URL, {
       method: "POST",
@@ -43,9 +56,10 @@ export async function POST(request: Request) {
     const json = await response.json().catch(() => null);
     const cloudText = response.ok ? parseTranscription(json) : "";
     if (!response.ok || !cloudText) {
-      const message = cloudText ? "" : readError(json) || `Transcription failed (HTTP ${response.status}).`;
-      console.error("voice-transcribe", message || json);
-      return NextResponse.json({ text: "", error: message || "Transcription failed." }, { status: 502 });
+      const message = readError(json) || `Transcription failed (HTTP ${response.status}).`;
+      console.error("voice-transcribe", response.status, message);
+      const status = response.status >= 400 && response.status <= 599 ? response.status : 502;
+      return NextResponse.json({ text: "", error: message }, { status });
     }
     return NextResponse.json({ text: cloudText });
   } catch (error) {

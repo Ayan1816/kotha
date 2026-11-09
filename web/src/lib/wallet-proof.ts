@@ -130,6 +130,12 @@ export function displayNetworkName(reported: string | null | undefined, network 
   return name === "mainnet" ? "mainnet" : name || "mainnet";
 }
 
+export const TESTNET_FAUCET_URL = "https://docs.near.org/getting-started/faucet";
+
+export function isInsufficientBalance(message: string): boolean {
+  return /does not have enough balance/i.test(message);
+}
+
 export function networkBadgeLabel(network = publicNetwork()): string {
   return network === "mainnet" ? "" : "Testnet Demo";
 }

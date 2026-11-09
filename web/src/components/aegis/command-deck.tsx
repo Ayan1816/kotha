@@ -2,7 +2,7 @@
 
 import { useKothaSession } from "@/app/providers";
 import { ApiKeyCard } from "@/components/aegis/api-key-card";
-import { DeckRequestError, fetchDashboard, fetchTeeCatalog, postDryRun, postExecute, postFreeze, postGrant, postPolicy, postSaveTx, postTeeChatStream } from "@/components/aegis/api";
+import { DeckRequestError, fetchDashboard, fetchTeeCatalog, postAdminLock, postAdminUnlock, postDryRun, postExecute, postFreeze, postGrant, postPolicy, postSaveTx, postTeeChatStream } from "@/components/aegis/api";
 import type { ChainLink } from "@/components/aegis/audit-panel";
 import { CopilotPanel, type ChatMessage } from "@/components/aegis/copilot-panel";
 import { translate, type Lang } from "@/components/aegis/copy";
@@ -17,6 +17,8 @@ import { resolveRemittance } from "@/lib/phone-resolver";
 import {
   chainMatches,
   configuredOwnerId,
+  isInsufficientBalance,
+  TESTNET_FAUCET_URL,
   createWalletProof,
   executionViewCall,
   parseFrozenReceiptJson,
@@ -72,14 +74,16 @@ export function CommandDeck() {
   const [teePhase, setTeePhase] = useState<TeePhase>("idle");
   const [remittanceLine, setRemittanceLine] = useState<string | null>(null);
   const [lastPrompt, setLastPrompt] = useState("");
+  const [adminCode, setAdminCode] = useState("");
   const near = useNearWallet();
   const session = useKothaSession();
 
   const frozen = dashboard?.agentState.frozen ?? dashboard?.agentState.policy.frozen ?? false;
   const accountId = (near.signedAccountId || "").trim();
+  const admin = dashboard?.admin === true;
   const ownerConfigured = strictOwnerMode() && configuredOwnerId().length > 0;
-  const ownerLock = ownerConfigured && accountId !== configuredOwnerId() ? translate(lang, "connectOwner") : null;
-  const grantNotice = accountId ? null : translate(lang, "connectOwner");
+  const ownerLock = !admin && ownerConfigured && accountId !== configuredOwnerId() ? translate(lang, "connectOwner") : null;
+  const grantNotice = admin || accountId ? null : translate(lang, "grantLocked");
   const thinking = busy === "chat";
 
   useEffect(() => {
@@ -164,7 +168,7 @@ export function CommandDeck() {
     try {
       const result = await run("chat", async () => {
         return postTeeChatStream(
-          { message: text, model, autoRedact, locale: lang },
+          { message: text, model, autoRedact, locale: lang, accountId },
           {
             onStep: (step) => setChatStep(step),
             onDelta: (next) => setLiveText(next),
@@ -203,7 +207,7 @@ export function CommandDeck() {
         execution: null,
       });
     } catch (error) {
-      const message = error instanceof Error ? error.message : translate(lang, "loadFail");
+      const message = aiLimitText(lang, error) || (error instanceof Error ? error.message : translate(lang, "loadFail"));
       setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: message }]);
       setQuote(null);
       setTeePhase("unverified");
@@ -224,6 +228,7 @@ export function CommandDeck() {
   }
 
   async function ownerProof(action: string, payload: Record<string, unknown>) {
+    if (admin) return null;
     const account = (near.signedAccountId || "").trim();
     if (!account) {
       if (ownerConfigured) throw new Error(translate(lang, "connectOwner"));
@@ -253,6 +258,27 @@ export function CommandDeck() {
     } catch (error) {
       setNotice(error instanceof Error ? error.message : translate(lang, "loadFail"));
       throw error;
+    }
+  }
+
+  async function unlockAdmin() {
+    try {
+      await run("admin", () => postAdminUnlock(adminCode));
+      setAdminCode("");
+      setNotice(translate(lang, "adminOn"));
+      await refresh();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : translate(lang, "loadFail"));
+    }
+  }
+
+  async function lockAdmin() {
+    try {
+      await run("admin", () => postAdminLock());
+      setNotice(translate(lang, "adminOff"));
+      await refresh();
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : translate(lang, "loadFail"));
     }
   }
 
@@ -314,7 +340,7 @@ export function CommandDeck() {
     if (!quote) return;
     try {
       const account = (near.signedAccountId || "").trim();
-      if (ownerConfigured && account !== configuredOwnerId()) {
+      if (!admin && ownerConfigured && account !== configuredOwnerId()) {
         setNotice(translate(lang, "connectOwner"));
         return;
       }
@@ -339,7 +365,7 @@ export function CommandDeck() {
         await refresh();
         return;
       }
-      if (!account) {
+      if (admin || !account) {
         setNotice(result.vault.chain_error || translate(lang, "serverSigned"));
         if (result.vault.tx_hash || result.vault.receipt_hash) {
           setLatestChain({
@@ -413,7 +439,7 @@ export function CommandDeck() {
 
   return (
     <div className="min-h-screen bg-[#05070b]">
-      <TelemetryBar lang={lang} onLang={chooseLang} />
+      <TelemetryBar lang={lang} onLang={chooseLang} admin={admin} />
       <main className="mx-auto w-full max-w-[1200px] px-6 pb-6 pt-[88px]">
         {frozen ? (
           <div className="mb-4 rounded-2xl border border-[#FF3B5C]/50 bg-[#FF3B5C]/15 px-4 py-3 text-center text-sm text-[#ffd0d8]">
@@ -422,7 +448,18 @@ export function CommandDeck() {
         ) : null}
         {notice ? (
           <div className="mb-4 flex items-start justify-between gap-3 rounded-2xl border border-white/10 bg-black/40 px-4 py-3 text-sm text-white/80">
-            <p className="min-w-0 break-words">{notice}</p>
+            <p className="min-w-0 break-words">
+              {isInsufficientBalance(notice) ? (
+                <>
+                  {translate(lang, "lowBalance")}{" "}
+                  <a href={TESTNET_FAUCET_URL} target="_blank" rel="noreferrer" className="text-[#7DD3FC] underline-offset-2 hover:underline">
+                    {translate(lang, "faucetLink")}
+                  </a>
+                </>
+              ) : (
+                notice
+              )}
+            </p>
             <button type="button" className="text-base text-white/50" onClick={() => setNotice(null)} aria-label={translate(lang, "close")}>
               ×
             </button>
@@ -472,6 +509,7 @@ export function CommandDeck() {
             autoRedact={autoRedact}
             frozen={frozen}
             teePhase={teePhase}
+            accountId={accountId}
             onAutoRedact={setAutoRedact}
             onSend={(text) => void send(text)}
             onDryRun={() => {
@@ -513,6 +551,15 @@ export function CommandDeck() {
         {dashboard && tab === "settings" ? (
           <div className="space-y-4">
             <ApiKeyCard lang={lang} />
+            <AdminModeCard
+              lang={lang}
+              unlocked={admin}
+              code={adminCode}
+              busy={busy === "admin"}
+              onCode={setAdminCode}
+              onUnlock={() => void unlockAdmin()}
+              onLock={() => void lockAdmin()}
+            />
             <PolicyPanel
               lang={lang}
               policy={dashboard.agentState.policy}
@@ -546,6 +593,57 @@ export function CommandDeck() {
   );
 }
 
+function AdminModeCard({
+  lang,
+  unlocked,
+  code,
+  busy,
+  onCode,
+  onUnlock,
+  onLock,
+}: {
+  lang: Lang;
+  unlocked: boolean;
+  code: string;
+  busy: boolean;
+  onCode: (value: string) => void;
+  onUnlock: () => void;
+  onLock: () => void;
+}) {
+  return (
+    <section className="rounded-2xl border border-white/10 bg-[#07110d] p-4 shadow-[0_16px_40px_rgba(0,0,0,0.35)]">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <h2 className="text-xl font-semibold text-white">{translate(lang, "adminTitle")}</h2>
+          <p className="mt-1 text-sm text-white/60">{translate(lang, "adminHint")}</p>
+        </div>
+        <ShimmerActionButton loading={busy} onClick={unlocked ? onLock : onUnlock}>
+          {unlocked ? translate(lang, "adminLock") : translate(lang, "adminUnlock")}
+        </ShimmerActionButton>
+      </div>
+      {unlocked ? null : (
+        <form
+          className="mt-3"
+          onSubmit={(event) => {
+            event.preventDefault();
+            onUnlock();
+          }}
+        >
+          <input
+            type="password"
+            name="kotha-admin-code"
+            autoComplete="off"
+            value={code}
+            onChange={(event) => onCode(event.target.value)}
+            placeholder={translate(lang, "adminPlaceholder")}
+            className="w-full rounded-xl border border-white/10 bg-black/40 px-3 py-2 text-sm text-white outline-none placeholder:text-white/35"
+          />
+        </form>
+      )}
+    </section>
+  );
+}
+
 function sameIntent(left: AegisIntent, right: AegisIntent): boolean {
   return (
     left.action === right.action &&
@@ -555,6 +653,13 @@ function sameIntent(left: AegisIntent, right: AegisIntent): boolean {
     left.recipient === right.recipient &&
     left.confidential === right.confidential
   );
+}
+
+function aiLimitText(lang: Lang, error: unknown): string {
+  if (!(error instanceof DeckRequestError)) return "";
+  if (error.code === "free_limit") return translate(lang, "freeLimit");
+  if (error.code === "wallet_limit") return translate(lang, "walletLimit");
+  return "";
 }
 
 function isAmountError(message: string, error: unknown): boolean {

@@ -2,7 +2,10 @@ import { createHash, randomBytes } from "crypto";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { keccak_256 } from "@noble/hashes/sha3.js";
+import { MAX_REPLY_TOKENS } from "./ai-rate-limit";
 import { redactSensitiveText } from "./pii-redact";
+import { directedRecipient, foldDigits, readTransferFields, type TransferFields } from "./transfer-parse";
+export { parseTransferCommand, type ParsedTransfer } from "./transfer-parse";
 import { displayReply, interpretChatBody, matchingResponseHash, parseSignedPayload, partialExplanation, type LoaderStep } from "./chat-stream";
 import {
   assetMeta,
@@ -53,6 +56,7 @@ export type RedactionResult = {
 export type ChatCompletionRequest = {
   model: string;
   stream: true;
+  max_tokens: number;
   response_format: { type: "json_object" };
   messages: Array<{ role: "system" | "user"; content: string }>;
 };
@@ -120,20 +124,26 @@ export function normalizeChatLocale(value: unknown): ChatLocale {
   return typeof value === "string" && (CHAT_LOCALES as readonly string[]).includes(value) ? (value as ChatLocale) : "en";
 }
 
+export function replyUsesBengali(locale: ChatLocale, userMessage: string): boolean {
+  if (/[\u0980-\u09FF]/.test(userMessage)) return true;
+  if (/[A-Za-z]{2,}/.test(userMessage)) return false;
+  return locale === "bn";
+}
+
 function systemPrompt(locale: ChatLocale, userMessage = ""): string {
   const name = LOCALE_NAME[locale];
-  const bangla = locale === "bn" || /[\u0980-\u09FF]/.test(userMessage);
+  const bangla = replyUsesBengali(locale, userMessage);
   const identity =
     locale === "bn"
       ? "You are Kotha (কথা), the Bangla-first verifiable confidential voice DeFi and cross-chain remittance copilot on NEAR. Tagline: Speak. Verify. Execute."
       : "You are Kotha, the verifiable confidential voice DeFi and cross-chain remittance copilot on NEAR. Tagline: Speak. Verify. Execute.";
   const language = bangla
-    ? "Always reply in the same language as the user. If the user writes Bengali, reply in Bengali. The reply and explanation fields are natural language, never a JSON string."
-    : locale === "en"
-      ? "Always reply in the same language as the user. If the user writes Bengali, reply in Bengali. Reply 100% in English when the user writes English. The reply and explanation fields are natural language, never a JSON string."
-      : `Always reply in the same language as the user. If the user writes Bengali, reply in Bengali. Reply 100% in ${name} when that is the user's language. The reply and explanation fields are natural language, never a JSON string.`;
+    ? "Reply in Bengali. The selected UI language is Bengali, or the user wrote Bengali. The reply and explanation fields are natural language, never a JSON string."
+    : locale === "en" || /[A-Za-z]{2,}/.test(userMessage)
+      ? "Reply in English. The selected UI language is English, or the user clearly wrote in English. The reply and explanation fields are natural language, never a JSON string."
+      : `Reply in ${name}. Follow the selected UI language unless the user clearly writes in another language. The reply and explanation fields are natural language, never a JSON string.`;
   const demos =
-    locale === "bn"
+    bangla
       ? [
           'Bangla demo: "আমার ২ NEAR দিয়ে USDT কিনে দাও" is a PASS swap of 2 wNEAR (nep141:wrap.near) to USDT (nep141:usdt.tether-token.near).',
           "Bangla demo: a প্রবাসী রেমিট্যান্স that says পাঠাও with a phone or email is a confidential transfer on intents.far after PII redaction.",
@@ -405,6 +415,7 @@ function buildChatRequest(
   return {
     model,
     stream: true,
+    max_tokens: MAX_REPLY_TOKENS,
     response_format: { type: "json_object" },
     messages: [
       { role: "system", content: systemPrompt(locale, userMessage) },
@@ -430,7 +441,15 @@ async function attestHardware(args: {
   const chatJson = interpretChatBody(args.responseText);
   const content = extractAssistantContent(chatJson);
   const parsed = content ? parseModelDecision(content) : null;
-  const decision = resolveDecision(args.userMessage, args.policyContext, args.balancesContext, args.redaction, parsed, args.locale);
+  const decision = resolveDecision(
+    args.userMessage,
+    args.policyContext,
+    args.balancesContext,
+    args.redaction,
+    parsed?.decision ?? null,
+    parsed?.rawIntent ?? null,
+    args.locale,
+  );
   const rawHash = args.bodySha256 || sha256Hex(args.responseText);
   const contentHash = content ? sha256Hex(content) : "";
   const completionHash = sha256Hex(JSON.stringify(chatJson));
@@ -575,13 +594,8 @@ function packInference(args: {
   };
 }
 
-const BN_DIGITS = "০১২৩৪৫৬৭৮৯";
-
 function foldPrompt(text: string): string {
-  return text.replace(/[০-৯]/g, (digit) => {
-    const index = BN_DIGITS.indexOf(digit);
-    return index >= 0 ? String(index) : digit;
-  });
+  return foldDigits(text);
 }
 
 function hasBengali(text: string): boolean {
@@ -606,17 +620,99 @@ function resolveDecision(
   balancesContext: unknown,
   redaction: RedactionResult | null,
   modelDecision: CopilotDecision | null,
+  rawIntent: unknown,
   locale: ChatLocale,
 ): CopilotDecision {
   const local = decideLocally(userMessage, policyContext, balancesContext, redaction, locale);
   if (isScriptedKothaPrompt(foldPrompt(userMessage))) return local;
-  if (!modelDecision) return local;
-  const explanation = displayReply(modelDecision.explanation).trim() || local.explanation;
-  const intent = applyParsedTransfer(modelDecision.intent ?? local.intent, userMessage);
-  if (local.policy_status === "BLOCKED" && local.intent && modelDecision.policy_status !== "BLOCKED") {
-    return { ...local, explanation, intent: applyParsedTransfer(local.intent, userMessage) };
-  }
-  return { ...modelDecision, explanation, intent };
+  const guarded = guardTransferCommand(
+    userMessage,
+    rawIntent ?? modelDecision?.intent ?? local.intent,
+    normalizePolicyContext(policyContext),
+    normalizeBalancesContext(balancesContext),
+    locale,
+    redaction,
+  );
+  if (!guarded) return modelDecision ?? local;
+  return {
+    explanation: guarded.explanation,
+    risk_score: guarded.risk_score,
+    policy_status: guarded.policy_status,
+    policy_reason: guarded.policy_reason,
+    intent: guarded.intent,
+  };
+}
+
+export function guardTransferCommand(
+  message: string,
+  loose: unknown,
+  policy: ReturnType<typeof normalizePolicyContext>,
+  balances: Parameters<typeof previewIntent>[2],
+  locale: ChatLocale = "en",
+  redaction: RedactionResult | null = null,
+): {
+  intent: AegisIntent;
+  preview: DryRunPreview;
+  explanation: string;
+  policy_status: PolicyStatus;
+  policy_reason: string;
+  risk_score: number;
+} | null {
+  const fields = readTransferFields(loose, message);
+  const painted = paintTransfer(normalizeModelIntent(loose) ?? intentFromFields(fields), fields);
+  if (!painted || !/^\d+(\.\d+)?$/.test(painted.amount)) return null;
+  const preview = previewIntent(painted, policy, balances);
+  const policyStatus: PolicyStatus = preview.allowed ? (preview.warnings.length > 0 ? "WARNING" : "PASS") : "BLOCKED";
+  const redactionNote =
+    redaction && redaction.redactionsCount > 0 ? " Personal data was masked before the prompt left the privacy boundary." : "";
+  const explanation = bilingualExplanation(foldPrompt(message), painted, preview, policyStatus, false, redactionNote, locale);
+  const limitReason = preview.warnings.filter((warning) => warning.startsWith("PROHORI_")).join(" ");
+  return {
+    intent: painted,
+    preview,
+    explanation,
+    policy_status: policyStatus,
+    policy_reason:
+      policyStatus === "PASS"
+        ? passReason(painted, preview)
+        : [limitReason, preview.warnings.join(" ")].filter((part) => part.length > 0).join(" "),
+    risk_score: scoreRisk(policyStatus, preview.budgetImpact.txUsd, policy.perTxCapUsd),
+  };
+}
+
+function intentFromFields(fields: TransferFields): AegisIntent | null {
+  if (!fields.amount || !fields.token) return null;
+  const asset = canonicalAsset(fields.token);
+  if (!asset) return null;
+  return {
+    action: "transfer",
+    origin_asset: asset,
+    destination_asset: asset,
+    amount: fields.amount,
+    amount_usd_estimate: estimatedUsd(asset, fields.amount),
+    max_slippage_bps: 0,
+    recipient: fields.recipient,
+    chain: "near",
+    confidential: false,
+  };
+}
+
+function paintTransfer(intent: AegisIntent | null, fields: TransferFields): AegisIntent | null {
+  if (!intent) return null;
+  const tokenAsset = fields.token ? canonicalAsset(fields.token) : "";
+  const origin = intent.origin_asset || tokenAsset;
+  if (!origin) return null;
+  const destination = intent.destination_asset || tokenAsset || origin;
+  const amount = intent.amount.trim() || fields.amount;
+  const recipient = intent.recipient.trim() || fields.recipient;
+  return {
+    ...intent,
+    origin_asset: origin,
+    destination_asset: destination,
+    amount,
+    recipient,
+    amount_usd_estimate: estimatedUsd(origin, amount),
+  };
 }
 
 function decideLocally(
@@ -720,10 +816,10 @@ function bilingualExplanation(
   locale: ChatLocale,
 ): string {
   const english = `${explainIntent(intent, preview, status, assumedAmount)}${redactionNote}`;
-  if (locale !== "en" && locale !== "bn") return localLine(locale, intent, status) || english;
-  if (locale === "en" && !hasBengali(folded)) return english;
-  if (locale === "bn" && !hasBengali(folded)) return localLine("bn", intent, status) || english;
-  if (!hasBengali(folded)) return english;
+  if (!replyUsesBengali(locale, folded)) {
+    if (locale !== "en" && locale !== "bn" && !/[A-Za-z]{2,}/.test(folded)) return localLine(locale, intent, status) || english;
+    return english;
+  }
   if (/রেমিট্যান্স|প্রবাসী/.test(folded) && intent.action === "transfer") {
     return `প্রবাসী রেমিট্যান্স: বাড়িতে ${intent.amount} USDT পাঠানো হচ্ছে। ফোন [REDACTED_PHONE] এবং ইমেইল [REDACTED_EMAIL] openai/privacy-filter দিয়ে লুকানো হয়েছে। গোপন ট্রান্সফার intents.far-এ। Confidential remittance of ${intent.amount} USDT (nep141:usdt.tether-token.near) on intents.far. Phone and email were redacted to [REDACTED_PHONE] and [REDACTED_EMAIL]. Policy ${status}. ${preview.warnings.join(" ")}`.trim();
   }
@@ -734,37 +830,6 @@ function bilingualExplanation(
     return `${intent.amount} wNEAR (nep141:wrap.near) দিয়ে USDT (nep141:usdt.tether-token.near) কেনা হচ্ছে। নীতি: ${status}। Swap ${intent.amount} wNEAR (nep141:wrap.near) to USDT (nep141:usdt.tether-token.near). Policy ${status}. ${english}`;
   }
   return `${english} বাংলা নীতি: ${status}।`;
-}
-
-const RECIPIENT_RE = /(?:to|কে)\s+([a-z0-9_\-.]+\.(?:near|testnet))/i;
-const RECIPIENT_BEFORE_RE = /([a-z0-9_\-.]+\.(?:near|testnet))\s*(?:কে|(?:to)\b)/i;
-
-export type ParsedTransfer = { amount: string; token: string; recipient: string };
-
-export function parseTransferCommand(message: string): ParsedTransfer | null {
-  const folded = foldPrompt(message);
-  const recipient = folded.match(RECIPIENT_RE)?.[1] || folded.match(RECIPIENT_BEFORE_RE)?.[1] || "";
-  const amountMatch = folded.match(/([0-9]+(?:\.[0-9]+)?)\s*(usdc|usdt|near|wnear)\b/i);
-  if (!recipient || !amountMatch?.[1] || !amountMatch[2]) return null;
-  if (/^intents\.(?:near|far)$/i.test(recipient)) return null;
-  const token = amountMatch[2].toLowerCase() === "wnear" ? "wNEAR" : amountMatch[2].toUpperCase();
-  return { amount: amountMatch[1].replace(/,/g, ""), token, recipient };
-}
-
-function applyParsedTransfer(intent: AegisIntent | null, message: string): AegisIntent | null {
-  if (!intent) return intent;
-  const parsed = parseTransferCommand(message);
-  if (!parsed) return intent;
-  if (intent.action !== "transfer" && intent.action !== "withdraw") return intent;
-  const asset = canonicalAsset(parsed.token);
-  return {
-    ...intent,
-    amount: parsed.amount,
-    recipient: parsed.recipient,
-    origin_asset: asset || intent.origin_asset,
-    destination_asset: asset || intent.destination_asset,
-    amount_usd_estimate: estimatedUsd(asset || intent.origin_asset, parsed.amount),
-  };
 }
 
 function parseUserIntent(message: string): { intent: AegisIntent; assumedAmount: boolean } | null {
@@ -859,8 +924,8 @@ function destinationFor(action: IntentAction, assets: string[], origin: string):
 }
 
 function detectRecipient(text: string, action: IntentAction): string {
-  const directed = text.match(RECIPIENT_RE)?.[1] || text.match(RECIPIENT_BEFORE_RE)?.[1];
-  if (directed && !/^intents\.(?:near|far)$/i.test(directed)) return directed;
+  const directed = directedRecipient(text);
+  if (directed) return directed;
   const near = text.match(/\b([a-z0-9][a-z0-9._-]{0,62}\.(?:near|testnet|tg))\b/i);
   if (near && !/^intents\.(?:near|far)$/i.test(near[1])) return near[1];
   const evm = text.match(/\b(0x[a-fA-F0-9]{40})\b/);
@@ -991,7 +1056,7 @@ function localLine(locale: ChatLocale, intent: AegisIntent, status: PolicyStatus
   return lines[locale]?.[action] ?? null;
 }
 
-function parseModelDecision(content: string): CopilotDecision | null {
+function parseModelDecision(content: string): { decision: CopilotDecision; rawIntent: unknown } | null {
   const parsed = parseJson(stripFence(content));
   const record = asRecord(parsed);
   if (!record) return null;
@@ -1000,13 +1065,17 @@ function parseModelDecision(content: string): CopilotDecision | null {
   const status = record.policy_status;
   const policyStatus: PolicyStatus = status === "PASS" || status === "WARNING" || status === "BLOCKED" ? status : "PASS";
   const risk = typeof record.risk_score === "number" ? record.risk_score : Number(record.risk_score);
+  const rawIntent = record.intent == null ? record : record.intent;
   const intent = record.intent == null ? flatIntent(record) : normalizeModelIntent(record.intent) ?? flatIntent(record);
   return {
-    explanation: reply,
-    risk_score: Number.isFinite(risk) ? Math.max(0, Math.min(100, risk)) : 8,
-    policy_status: policyStatus,
-    policy_reason: typeof record.policy_reason === "string" && record.policy_reason.trim() ? record.policy_reason : reply,
-    intent,
+    rawIntent,
+    decision: {
+      explanation: reply,
+      risk_score: Number.isFinite(risk) ? Math.max(0, Math.min(100, risk)) : 8,
+      policy_status: policyStatus,
+      policy_reason: typeof record.policy_reason === "string" && record.policy_reason.trim() ? record.policy_reason : reply,
+      intent,
+    },
   };
 }
 
@@ -1021,9 +1090,13 @@ function naturalReply(record: Record<string, unknown>): string {
 function flatIntent(record: Record<string, unknown>): CopilotIntent | null {
   if (record.action === "none" || record.action == null) return null;
   if (!isAction(record.action)) return null;
+  const fields = readTransferFields(record, "");
   const amountNumber = finite(record.amount, Number.NaN);
-  const amount = Number.isFinite(amountNumber) ? String(amountNumber) : stringValue(record.amount) || "0";
-  const origin = canonicalAsset(stringValue(record.origin_asset)) || (record.action === "swap" ? "nep141:wrap.near" : "nep141:usdt.tether-token.near");
+  const amount = fields.amount || (Number.isFinite(amountNumber) ? String(amountNumber) : stringValue(record.amount) || "0");
+  const origin =
+    canonicalAsset(stringValue(record.origin_asset)) ||
+    canonicalAsset(fields.token) ||
+    (record.action === "swap" ? "nep141:wrap.near" : "nep141:usdt.tether-token.near");
   const destination = canonicalAsset(stringValue(record.destination_asset)) || (record.action === "swap" ? "nep141:usdt.tether-token.near" : origin);
   return {
     action: record.action,
@@ -1032,7 +1105,7 @@ function flatIntent(record: Record<string, unknown>): CopilotIntent | null {
     amount,
     amount_usd_estimate: finite(record.amount_usd_estimate, 0),
     max_slippage_bps: finite(record.max_slippage_bps, record.action === "swap" ? 50 : 0),
-    recipient: stringValue(record.recipient),
+    recipient: fields.recipient,
     chain: stringValue(record.chain) || "near",
     confidential: Boolean(record.confidential) || record.action === "shield",
   };
@@ -1041,17 +1114,18 @@ function flatIntent(record: Record<string, unknown>): CopilotIntent | null {
 function normalizeModelIntent(value: unknown): CopilotIntent | null {
   const record = asRecord(value);
   if (!record || !isAction(record.action)) return null;
-  const origin = canonicalAsset(stringValue(record.origin_asset));
+  const fields = readTransferFields(record, "");
+  const origin = canonicalAsset(stringValue(record.origin_asset)) || canonicalAsset(fields.token);
   const destination = canonicalAsset(stringValue(record.destination_asset) || origin);
   if (!origin) return null;
   return {
     action: record.action,
     origin_asset: origin,
     destination_asset: destination || origin,
-    amount: record.amount == null ? "0" : String(record.amount).replace(/,/g, ""),
-    amount_usd_estimate: finite(record.amount_usd_estimate, 0),
+    amount: fields.amount || (record.amount == null ? "0" : String(record.amount).replace(/,/g, "")),
+    amount_usd_estimate: finite(record.amount_usd_estimate, estimatedUsd(origin, fields.amount || "0")),
     max_slippage_bps: finite(record.max_slippage_bps, record.action === "swap" ? 50 : 0),
-    recipient: stringValue(record.recipient),
+    recipient: fields.recipient,
     chain: stringValue(record.chain) || "near",
     confidential: Boolean(record.confidential) || record.action === "shield",
   };

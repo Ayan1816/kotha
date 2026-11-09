@@ -6,7 +6,7 @@ import { allowsMainnet, useKothaSession, type KothaNetwork } from "@/app/provide
 
 export type TeePhase = "idle" | "unverified" | "verified";
 
-export function TelemetryBar({ lang, onLang }: { lang: Lang; onLang: (lang: Lang) => void }) {
+export function TelemetryBar({ lang, onLang, admin = false }: { lang: Lang; onLang: (lang: Lang) => void; admin?: boolean }) {
   const { network, setNetwork } = useKothaSession();
   const brand = lang === "bn" ? translate(lang, "brandMark") : translate(lang, "brand");
   return (
@@ -20,6 +20,11 @@ export function TelemetryBar({ lang, onLang }: { lang: Lang; onLang: (lang: Lang
       <div className="flex shrink-0 items-center gap-1 sm:gap-2">
         <NetworkToggle lang={lang} network={network} onNetwork={setNetwork} />
         <LanguageToggle lang={lang} onLang={onLang} />
+        {admin ? (
+          <span className="inline-flex h-9 max-w-[9.5rem] items-center truncate rounded-full border border-[#00EC97]/40 bg-[#00EC97]/10 px-2 text-[11px] font-semibold text-[#00EC97] sm:max-w-none sm:px-3 sm:text-xs">
+            {translate(lang, "adminBadge")}
+          </span>
+        ) : null}
         <WalletButton lang={lang} />
       </div>
     </header>
@@ -56,19 +61,26 @@ function NetworkToggle({
 }
 
 function LanguageToggle({ lang, onLang }: { lang: Lang; onLang: (lang: Lang) => void }) {
-  const next = lang === "bn" ? "en" : "bn";
   return (
-    <button
-      type="button"
-      aria-label="বাংলা | EN"
-      title={translate(lang, "languageLabel")}
-      onClick={() => onLang(next)}
-      className="inline-flex h-9 items-center whitespace-nowrap rounded-full border border-white/15 px-2 text-xs font-semibold sm:px-3 sm:text-sm"
-    >
-      <span className={lang === "bn" ? "text-[#00EC97]" : "text-white/45"}>বাংলা</span>
-      <span className="px-1 text-white/30">|</span>
-      <span className={lang === "en" ? "text-[#00EC97]" : "text-white/45"}>EN</span>
-    </button>
+    <div className="inline-flex h-9 items-center whitespace-nowrap rounded-full border border-white/15 px-1 text-xs font-semibold sm:text-sm" title={translate(lang, "languageLabel")}>
+      <button
+        type="button"
+        aria-pressed={lang === "bn"}
+        onClick={() => onLang("bn")}
+        className={`rounded-full px-2 py-1 ${lang === "bn" ? "text-[#00EC97]" : "text-white/45"}`}
+      >
+        {translate(lang, "switchBn")}
+      </button>
+      <span className="px-0.5 text-white/30">|</span>
+      <button
+        type="button"
+        aria-pressed={lang === "en"}
+        onClick={() => onLang("en")}
+        className={`rounded-full px-2 py-1 ${lang === "en" ? "text-[#00EC97]" : "text-white/45"}`}
+      >
+        EN
+      </button>
+    </div>
   );
 }
 

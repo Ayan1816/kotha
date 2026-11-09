@@ -40,7 +40,7 @@ function fail(data: unknown, status: number): DeckRequestError {
 }
 
 export async function fetchDashboard(): Promise<DashboardResponse> {
-  const response = await fetch("/api/intents", { cache: "no-store" });
+  const response = await fetch("/api/intents", { cache: "no-store", credentials: "include" });
   const data = await readJson(response);
   if (!response.ok) throw fail(data, response.status);
   if (!isRecord(data) || !isRecord(data.agentState) || !isRecord(data.vaultInfo) || !Array.isArray(data.executions)) {
@@ -85,6 +85,12 @@ function withNearAiKey(headers: Record<string, string>): Record<string, string> 
   return headers;
 }
 
+function aiHeaders(headers: Record<string, string>, accountId?: string): Record<string, string> {
+  const account = accountId?.trim() || "";
+  if (account) headers["x-kotha-account"] = account.slice(0, 80);
+  return withNearAiKey(headers);
+}
+
 export async function fetchTeeCatalog(): Promise<TeeCatalogResponse> {
   const response = await fetch("/api/tee-chat", { cache: "no-store", headers: withNearAiKey({}) });
   const data = await readJson(response);
@@ -95,11 +101,13 @@ export async function fetchTeeCatalog(): Promise<TeeCatalogResponse> {
   return data as TeeCatalogResponse;
 }
 
-export async function postTeeChat(body: { message: string; model: string; autoRedact: boolean; locale?: string }): Promise<TeeChatResponse> {
+export async function postTeeChat(body: { message: string; model: string; autoRedact: boolean; locale?: string; accountId?: string }): Promise<TeeChatResponse> {
+  const { accountId, ...payload } = body;
   const response = await fetch("/api/tee-chat", {
     method: "POST",
-    headers: withNearAiKey({ "content-type": "application/json" }),
-    body: JSON.stringify(body),
+    credentials: "include",
+    headers: aiHeaders({ "content-type": "application/json" }, accountId),
+    body: JSON.stringify(payload),
   });
   const data = await readJson(response);
   if (!response.ok) throw fail(data, response.status);
@@ -107,13 +115,15 @@ export async function postTeeChat(body: { message: string; model: string; autoRe
 }
 
 export async function postTeeChatStream(
-  body: { message: string; model: string; autoRedact: boolean; locale?: string },
+  body: { message: string; model: string; autoRedact: boolean; locale?: string; accountId?: string },
   handlers: { onStep?: (step: LoaderStep) => void; onDelta?: (text: string) => void } = {},
 ): Promise<TeeChatResponse> {
+  const { accountId, ...payload } = body;
   const response = await fetch("/api/tee-chat", {
     method: "POST",
-    headers: withNearAiKey({ "content-type": "application/json", accept: "text/event-stream" }),
-    body: JSON.stringify({ ...body, stream: true }),
+    credentials: "include",
+    headers: aiHeaders({ "content-type": "application/json", accept: "text/event-stream" }, accountId),
+    body: JSON.stringify({ ...payload, stream: true }),
   });
   if (!response.ok) {
     const data = await readJson(response);
@@ -186,11 +196,20 @@ export async function postSaveTx(id: string, txHash: string, wallet?: WalletProo
   return postIntent("save_tx", { id, tx_hash: txHash }, wallet);
 }
 
+export async function postAdminUnlock(code: string): Promise<{ type: "admin_unlock"; admin: true }> {
+  return postIntent("admin_unlock", { code });
+}
+
+export async function postAdminLock(): Promise<{ type: "admin_lock"; admin: false }> {
+  return postIntent("admin_lock", {});
+}
+
 async function postIntent<T>(type: string, payload: Record<string, unknown>, wallet?: WalletProofWire | null): Promise<T> {
   const body: Record<string, unknown> = { type, payload };
   if (wallet) body.wallet = wallet;
   const response = await fetch("/api/intents", {
     method: "POST",
+    credentials: "include",
     headers: { "content-type": "application/json" },
     body: JSON.stringify(body),
   });

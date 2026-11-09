@@ -108,6 +108,7 @@ export type AttestedInference = {
   request: {
     model: string;
     stream: true;
+    max_tokens: number;
     response_format: { type: "json_object" };
     messages: Array<{ role: "system" | "user"; content: string }>;
   };
@@ -267,6 +268,7 @@ export type DashboardResponse = {
   agentState: AgentStateView;
   vaultInfo: VaultInfo;
   executions: VerifiedExecution[];
+  admin?: boolean;
 };
 
 export type TeeCatalogResponse = {

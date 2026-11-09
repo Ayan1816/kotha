@@ -17,5 +17,7 @@ test("points voice upload at NEAR whisper without echoing a key", () => {
   assert.equal(chooseTranscript(400, "", "").text, "");
   assert.match(chooseTranscript(null, "", "").message, /unavailable/i);
   assert.equal(normalizeVoiceLanguage("es"), "es");
+  assert.equal(normalizeVoiceLanguage("bn-BD"), "bn");
+  assert.equal(normalizeVoiceLanguage("en-US"), "en");
   assert.equal(normalizeVoiceLanguage("nope"), "en");
 });

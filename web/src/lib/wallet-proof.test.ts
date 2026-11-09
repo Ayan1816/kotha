@@ -17,10 +17,12 @@ import {
   executionViewCall,
   explorerTxUrl,
   findAccessKey,
+  isInsufficientBalance,
   isOwnerSigned,
   ownerActionsOpen,
   parseFrozenReceiptJson,
   requiresOwnerProof,
+  TESTNET_FAUCET_URL,
   walletProofAttached,
   txHashFromOutcome,
   walletRecordCall,
@@ -188,6 +190,12 @@ describe("wallet proof helpers", () => {
     assert.equal(translate("bn", "disconnectWallet"), "ওয়ালেট বিচ্ছিন্ন করুন");
     assert.equal(translate("en", "connectOwner"), "Connect the owner wallet");
     assert.equal(translate("bn", "connectOwner"), "মালিকের ওয়ালেট যুক্ত করুন");
+    assert.equal(translate("en", "grantLocked"), "Connect the owner wallet or unlock Admin mode");
+    assert.equal(isInsufficientBalance("Account bob.testnet does not have enough balance for the transaction"), true);
+    assert.equal(isInsufficientBalance("The RPC timed out"), false);
+    assert.equal(TESTNET_FAUCET_URL, "https://docs.near.org/getting-started/faucet");
+    assert.equal(translate("en", "faucetLink"), "Get free testnet NEAR");
+    assert.equal(translate("bn", "grantTitle"), "সক্রিয় সেশন গ্রান্ট");
     assert.equal(translate("en", "walletLoading"), "Loading...");
     assert.equal(translate("en", "chainMatch"), "Matches chain");
     assert.equal(translate("en", "chainMismatch"), "Mismatch");

@@ -14,16 +14,17 @@ import {
 import { getVaultInfo, listExecutions, recordVerifiedExecution, type VerifiedExecution } from "@/lib/near-vault-rpc";
 import { anchorExecutionReceipt, overlayReceiptRows, saveReceiptTxHash } from "@/lib/receipt-service";
 import type { AegisIntent } from "@/lib/dashboard-types";
-import { configuredOwnerId, DEFAULT_CONTRACT_ID, DEMO_OWNER_ID, isPlausibleTxHash, publicNetwork, requiresOwnerProof, strictOwnerMode, walletProofAttached } from "@/lib/wallet-proof";
+import { adminCookieInit, adminSessionValid, allowAdminAttempt, checkAdminCode, ownerProofRequired, signAdminSession } from "@/lib/admin-session";
+import { configuredOwnerId, DEFAULT_CONTRACT_ID, DEMO_OWNER_ID, isPlausibleTxHash, publicNetwork, strictOwnerMode, walletProofAttached } from "@/lib/wallet-proof";
 import { requireOwnerProof, WalletAuthError } from "@/lib/wallet-verify";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const ACTIONS = ["dry_run", "execute", "update_policy", "rotate_grant", "revoke_grant", "emergency_freeze", "save_tx"] as const;
+const ACTIONS = ["dry_run", "execute", "update_policy", "rotate_grant", "revoke_grant", "emergency_freeze", "save_tx", "admin_unlock", "admin_lock"] as const;
 type IntentRouteAction = (typeof ACTIONS)[number];
 
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const [catalog, agentState, vaultInfo, executions] = await Promise.all([
       getNetworkAndTokens(),
@@ -37,6 +38,7 @@ export async function GET() {
       agentState,
       vaultInfo,
       executions: await overlayReceiptRows(executions),
+      admin: adminSessionValid(request.headers.get("cookie")),
     });
   } catch (error) {
     return errorResponse(error);
@@ -57,13 +59,23 @@ export async function POST(request: Request) {
   const type = record.type;
   if (!isAction(type)) {
     return NextResponse.json(
-      { error: { code: "invalid_action", message: "type must be dry_run, execute, update_policy, rotate_grant, revoke_grant, emergency_freeze, or save_tx." } },
+      { error: { code: "invalid_action", message: "type must be dry_run, execute, update_policy, rotate_grant, revoke_grant, emergency_freeze, save_tx, admin_unlock, or admin_lock." } },
       { status: 400 },
     );
   }
   const payload = asRecord(record.payload) ?? {};
+  if (type === "admin_unlock") return unlockAdmin(request, payload);
+  if (type === "admin_lock") return lockAdmin();
+  const admin = adminSessionValid(request.headers.get("cookie"));
   const walletAttached = walletProofAttached(record.wallet);
-  const enforceOwner = requiresOwnerProof(type) && (walletAttached || (strictOwnerMode() && configuredOwnerId().length > 0));
+  const useWallet = walletAttached && !admin;
+  const enforceOwner = ownerProofRequired({
+    action: type,
+    admin,
+    walletAttached,
+    strictOwner: strictOwnerMode(),
+    ownerId: configuredOwnerId(),
+  });
   if (enforceOwner) {
     try {
       await requireOwnerProof({ proof: record.wallet, action: type, payload });
@@ -74,7 +86,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: { code: "proof_invalid", message: "Wallet proof was rejected." } }, { status: 401 });
     }
   }
-  const signerAccountId = walletAttached ? proofAccountId(record.wallet) : serverSignerAccount();
+  const signerAccountId = useWallet ? proofAccountId(record.wallet) : serverSignerAccount();
   try {
     if (type === "dry_run") {
       const preview = await runDryRunPreview(payload.intent);
@@ -82,7 +94,7 @@ export async function POST(request: Request) {
     }
     if (type === "execute") {
       const tee = (asRecord(payload.teeAttestation) ?? asRecord(payload.attestation) ?? {}) as TeeProofInput;
-      if (proofAccountId(record.wallet) === DEMO_OWNER_ID) {
+      if (useWallet && proofAccountId(record.wallet) === DEMO_OWNER_ID) {
         const execution = await simulateDemoExecution(payload.intent, tee);
         return NextResponse.json({
           type,
@@ -100,7 +112,7 @@ export async function POST(request: Request) {
       const execution = await executeIntentWithGrant(payload.intent, tee);
       const vault = await recordVerifiedExecution(toVaultRecord(execution));
       const anchored = await anchorExecutionReceipt(execution, asIntent(payload.intent), {
-        skipChain: walletAttached,
+        skipChain: useWallet,
         signerAccountId,
       });
       return NextResponse.json({
@@ -190,6 +202,40 @@ function labelNetwork<T extends { network: string; contract_id: string; confiden
     contract_id: "demo (testnet)",
     confidential_contract_id: "demo (testnet)",
   };
+}
+
+function unlockAdmin(request: Request, payload: Record<string, unknown>) {
+  const ip = clientIp(request);
+  if (!allowAdminAttempt(ip)) {
+    return NextResponse.json({ error: { code: "admin_rate_limited", message: "Too many tries. Wait a minute." } }, { status: 429 });
+  }
+  const code = typeof payload.code === "string" ? payload.code : "";
+  const expected = process.env.KOTHA_ADMIN_CODE || "";
+  const verdict = checkAdminCode(code, expected);
+  if (verdict === "missing") {
+    return NextResponse.json({ error: { code: "admin_unconfigured", message: "Admin mode is not configured." } }, { status: 503 });
+  }
+  if (verdict !== "ok") {
+    return NextResponse.json({ error: { code: "admin_rejected", message: "That code was not accepted." } }, { status: 401 });
+  }
+  const token = signAdminSession(Date.now(), expected);
+  if (!token) {
+    return NextResponse.json({ error: { code: "admin_unconfigured", message: "Admin mode is not configured." } }, { status: 503 });
+  }
+  const response = NextResponse.json({ type: "admin_unlock", admin: true });
+  response.cookies.set(adminCookieInit(token));
+  return response;
+}
+
+function lockAdmin() {
+  const response = NextResponse.json({ type: "admin_lock", admin: false });
+  response.cookies.set(adminCookieInit("", true));
+  return response;
+}
+
+function clientIp(request: Request): string {
+  const forwarded = request.headers.get("x-forwarded-for")?.split(",")[0]?.trim();
+  return (forwarded || request.headers.get("x-real-ip") || "local").slice(0, 80);
 }
 
 function serverSignerAccount(): string {

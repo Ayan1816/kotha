@@ -4,6 +4,7 @@ import { CopyButton, HashRow } from "@/components/aegis/bits";
 import { translate, type CopyKey, type Lang } from "@/components/aegis/copy";
 import { attestationCurl, signatureCurl } from "@/components/aegis/format";
 import { displayReply, LOADER_STEPS, readActionCard, type LoaderStep } from "@/lib/chat-stream";
+import { recordedBlobToWav, voiceExceedsLimit } from "@/lib/wav";
 import { cn } from "@/lib/utils";
 import { EnclaveSwitch, SignatureTamperLab, SpotlightGlassCard, VoiceWaveform } from "@/components/ui/aegis-primitives";
 import type { AttestedInference, ChatModelId, DryRunPreview, PolicyStatus } from "@/lib/dashboard-types";
@@ -32,6 +33,7 @@ export function CopilotPanel({
   autoRedact,
   frozen,
   teePhase = "idle",
+  accountId = "",
   onAutoRedact,
   onSend,
   onDryRun,
@@ -47,6 +49,7 @@ export function CopilotPanel({
   autoRedact: boolean;
   frozen: boolean;
   teePhase?: "idle" | "unverified" | "verified";
+  accountId?: string;
   onAutoRedact: (next: boolean) => void;
   onSend: (text: string) => void;
   onDryRun?: () => void;
@@ -64,7 +67,9 @@ export function CopilotPanel({
   const captureGen = useRef(0);
   const listeningRef = useRef(false);
   const langRef = useRef(lang);
+  const accountRef = useRef(accountId);
   langRef.current = lang;
+  accountRef.current = accountId;
   const recordLimit = useRef<number | null>(null);
   const recordTick = useRef<number | null>(null);
   const recordStarted = useRef(0);
@@ -153,8 +158,11 @@ export function CopilotPanel({
         setListening(false);
         if (discardRecording.current) return;
         const blob = new Blob(recordChunks.current, { type: rec.mimeType || "audio/webm" });
-        if (blob.size > 0) void uploadVoice(blob);
-        else setVoiceNote(translate(langRef.current, "voiceUnavailable"));
+        if (blob.size < 1000) {
+          setVoiceNote(translate(langRef.current, "tooShort"));
+          return;
+        }
+        void uploadVoice(blob);
       };
       recorder.current = rec;
       rec.start();
@@ -190,21 +198,61 @@ export function CopilotPanel({
     const controller = new AbortController();
     const timer = window.setTimeout(() => controller.abort(), RECORD_LIMIT_MS);
     try {
+      const converted = await recordedBlobToWav(blob);
+      if (converted.duration < 0.5) {
+        setVoiceNote(translate(langRef.current, "tooShort"));
+        return;
+      }
+      if (voiceExceedsLimit(converted.duration)) {
+        setVoiceNote(translate(langRef.current, "voiceTooLong"));
+        return;
+      }
+      const language = langRef.current === "bn" ? "bn" : "en";
+      const file = new File([converted.wav], "audio.wav", { type: "audio/wav" });
       const form = new FormData();
-      form.set("file", blob, blob.type.includes("mp4") ? "speech.mp4" : "speech.webm");
-      form.set("language", langRef.current === "bn" ? "bn" : "en");
-      const response = await fetch("/api/voice-transcribe", { method: "POST", body: form, signal: controller.signal });
-      const data = (await response.json().catch(() => null)) as { text?: string; error?: string; message?: string } | null;
-      const text = typeof data?.text === "string" ? data.text.trim() : "";
+      form.set("file", file);
+      form.set("language", language);
+      const headers: HeadersInit = {};
+      const account = accountRef.current.trim();
+      if (account) headers["x-kotha-account"] = account;
+      const response = await fetch("/api/voice-transcribe", {
+        method: "POST",
+        body: form,
+        headers,
+        credentials: "include",
+        signal: controller.signal,
+      });
+      const data = await response.json().catch(() => null);
+      const text = data && typeof data === "object" && "text" in data && typeof data.text === "string" ? data.text.trim() : "";
       if (response.ok && text) {
         setInput(text);
         setVoiceNote(null);
         submit(text);
         return;
       }
-      setVoiceNote(data?.error || data?.message || translate(langRef.current, "voiceUnavailable"));
+      const failure = voiceErrorParts(data);
+      const capped = cappedVoiceNote(failure.code, response.status);
+      if (capped) {
+        setVoiceNote(translate(langRef.current, capped));
+        return;
+      }
+      const spoken = await fallbackSpeech(language);
+      if (spoken) {
+        setInput(spoken);
+        setVoiceNote(null);
+        submit(spoken);
+        return;
+      }
+      setVoiceNote(failure.message || translate(langRef.current, "voiceUnavailable"));
     } catch (error) {
       const aborted = error instanceof Error && error.name === "AbortError";
+      const spoken = aborted ? "" : await fallbackSpeech(langRef.current === "bn" ? "bn" : "en").catch(() => "");
+      if (spoken) {
+        setInput(spoken);
+        setVoiceNote(null);
+        submit(spoken);
+        return;
+      }
       setVoiceNote(aborted ? translate(langRef.current, "micTimeout") : error instanceof Error ? error.message : translate(langRef.current, "voiceUnavailable"));
     } finally {
       window.clearTimeout(timer);
@@ -212,6 +260,40 @@ export function CopilotPanel({
       setListening(false);
       listeningRef.current = false;
     }
+  }
+
+  function fallbackSpeech(language: "bn" | "en"): Promise<string> {
+    const Ctor = speechCtor();
+    if (!Ctor) return Promise.resolve("");
+    setVoiceNote(translate(langRef.current, "listeningAgain"));
+    return new Promise((resolve) => {
+      const rec = new Ctor();
+      let settled = false;
+      const finish = (text: string) => {
+        if (settled) return;
+        settled = true;
+        window.clearTimeout(limit);
+        resolve(text.trim());
+      };
+      const limit = window.setTimeout(() => {
+        try {
+          rec.stop();
+        } catch {
+          // Already stopped.
+        }
+        finish("");
+      }, 12_000);
+      rec.lang = language === "bn" ? "bn-BD" : "en-US";
+      rec.interimResults = false;
+      rec.continuous = false;
+      rec.onresult = (event) => finish(event.results?.[0]?.[0]?.transcript || "");
+      rec.onerror = () => finish("");
+      try {
+        rec.start();
+      } catch {
+        finish("");
+      }
+    });
   }
 
   function playVoiceDemo() {
@@ -504,6 +586,23 @@ function ActionCard({
   );
 }
 
+type SpeechEvent = { results?: ArrayLike<ArrayLike<{ transcript?: string }>> };
+type SpeechRec = {
+  lang: string;
+  interimResults: boolean;
+  continuous: boolean;
+  onresult: ((event: SpeechEvent) => void) | null;
+  onerror: (() => void) | null;
+  start: () => void;
+  stop: () => void;
+};
+
+function speechCtor(): (new () => SpeechRec) | null {
+  if (typeof window === "undefined") return null;
+  const host = window as unknown as { SpeechRecognition?: new () => SpeechRec; webkitSpeechRecognition?: new () => SpeechRec };
+  return host.SpeechRecognition || host.webkitSpeechRecognition || null;
+}
+
 function formatClock(total: number): string {
   const seconds = Math.max(0, Math.min(30, total));
   return `0:${String(seconds).padStart(2, "0")}`;
@@ -579,4 +678,27 @@ function StepLoader({ lang, step }: { lang: Lang; step: LoaderStep | null }) {
 function modeLabel(lang: Lang, mode: AttestedInference["mode"]): string {
   if (mode === "hardware-tee") return translate(lang, "modeHardware");
   return translate(lang, "modeUnverified");
+}
+
+function voiceErrorParts(data: unknown): { code: string; message: string } {
+  if (!data || typeof data !== "object") return { code: "", message: "" };
+  const record = data as { error?: unknown; message?: unknown };
+  if (typeof record.error === "string") return { code: "", message: record.error };
+  if (record.error && typeof record.error === "object") {
+    const err = record.error as { code?: unknown; message?: unknown };
+    return {
+      code: typeof err.code === "string" ? err.code : "",
+      message: typeof err.message === "string" ? err.message : "",
+    };
+  }
+  if (typeof record.message === "string") return { code: "", message: record.message };
+  return { code: "", message: "" };
+}
+
+function cappedVoiceNote(code: string, status: number): CopyKey | null {
+  if (code === "free_limit") return "freeLimit";
+  if (code === "wallet_limit") return "walletLimit";
+  if (code === "voice_too_long") return "voiceTooLong";
+  if (status === 429) return "freeLimit";
+  return null;
 }

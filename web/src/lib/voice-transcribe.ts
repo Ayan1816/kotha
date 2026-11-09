@@ -17,7 +17,9 @@ export function parseTranscription(body: unknown): string {
 }
 
 export function normalizeVoiceLanguage(value: unknown): (typeof VOICE_LANGS)[number] {
-  return typeof value === "string" && (VOICE_LANGS as readonly string[]).includes(value) ? (value as (typeof VOICE_LANGS)[number]) : "en";
+  if (typeof value !== "string") return "en";
+  const base = value.trim().toLowerCase().split(/[-_]/)[0] || "";
+  return (VOICE_LANGS as readonly string[]).includes(base) ? (base as (typeof VOICE_LANGS)[number]) : "en";
 }
 
 export function chooseTranscript(status: number | null, cloudText: string, hint: string): TranscriptChoice {
