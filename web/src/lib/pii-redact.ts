@@ -1,4 +1,5 @@
 import { BIP39_ENGLISH } from "./bip39-english";
+import { placeholdersKept, restoreNearAccounts, shieldNearAccounts } from "./near-account";
 
 export type PiiType = "email" | "phone" | "api_key" | "seed" | "id" | "card";
 
@@ -50,19 +51,22 @@ export async function redactSensitiveText(
     timeoutMs?: number;
   },
 ): Promise<RedactionResult> {
-  const local = redactDeterministic(text);
+  const shielded = shieldNearAccounts(text);
+  const local = redactDeterministic(shielded.text);
   const types = new Set<PiiType>(local.types);
   let redactedText = local.text;
   let redactionsCount = local.count;
   const apiKey = options?.apiKey?.trim() || "";
   if (apiKey) {
     try {
-      const remote = await callPrivacyFilter(text, apiKey, options);
+      const remote = await callPrivacyFilter(shielded.text, apiKey, options);
       for (const piiType of remote.types) types.add(piiType);
-      if (remote.text) {
+      if (remote.text && placeholdersKept(remote.text, shielded.accounts.length)) {
         const tightened = redactDeterministic(remote.text);
         for (const piiType of tightened.types) types.add(piiType);
-        if (tightened.count >= local.count) redactedText = tightened.text;
+        if (tightened.count >= local.count && placeholdersKept(tightened.text, shielded.accounts.length)) {
+          redactedText = tightened.text;
+        }
         redactionsCount = Math.max(redactionsCount, tightened.count, remote.count ?? 0);
       }
     } catch {
@@ -71,7 +75,7 @@ export async function redactSensitiveText(
   }
   return {
     originalLength: text.length,
-    redactedText,
+    redactedText: restoreNearAccounts(redactedText, shielded.accounts),
     redactionsCount,
     piiTypesFound: [...types],
   };

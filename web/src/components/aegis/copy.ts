@@ -113,7 +113,7 @@ const en = {
   explorer: "Testnet transaction",
   receiptHash: "receipt_hash",
   proof: "SHA-256 & TEE Signature Proof",
-  empty: "No proofs yet",
+  empty: "No proofs yet.",
   copied: "Copied",
   copy: "Copy",
   you: "You",
@@ -306,6 +306,14 @@ const en = {
   freeLimit: "Free limit reached. Connect your wallet to continue.",
   walletLimit: "Hourly limit reached. Try again in an hour.",
   voiceTooLong: "Voice is limited to 30 seconds.",
+  translating: "Translating...",
+  blockedByPolicy: "Blocked by policy",
+  balanceUnavailable: "Balance is unavailable. Connect a wallet.",
+  grantConnect: "Connect your wallet to manage session grants",
+  teeVerifiedTip: "Signature matches the attestation address and the response hash matches.",
+  teeUnverifiedTip: "The attestation signature or response hash did not verify.",
+  micDeniedHelp: "Microphone access was denied. Allow the microphone for this site in your browser settings, then try again.",
+  invalidRecipient: "The recipient format is invalid.",
 } as const;
 
 export type CopyKey = keyof typeof en;
@@ -613,6 +621,14 @@ const bn: { [K in CopyKey]: string } = {
   freeLimit: "ফ্রি সীমা শেষ। চালিয়ে যেতে ওয়ালেট যুক্ত করুন।",
   walletLimit: "ঘণ্টার সীমা শেষ। এক ঘণ্টা পর আবার চেষ্টা করুন।",
   voiceTooLong: "ভয়েস সর্বোচ্চ ৩০ সেকেন্ড।",
+  translating: "অনুবাদ হচ্ছে...",
+  blockedByPolicy: "নীতি ব্লক করেছে",
+  balanceUnavailable: "ব্যালেন্স পাওয়া যাচ্ছে না। একটি ওয়ালেট যুক্ত করুন।",
+  grantConnect: "সেশন গ্রান্ট দেখতে ওয়ালেট যুক্ত করুন",
+  teeVerifiedTip: "সিগনেচার অ্যাটেস্টেশন ঠিকানার সাথে মিলেছে এবং রেসপন্স হ্যাশ মিলেছে।",
+  teeUnverifiedTip: "অ্যাটেস্টেশন সিগনেচার বা রেসপন্স হ্যাশ মেলেনি।",
+  micDeniedHelp: "মাইক্রোফোনের অনুমতি বন্ধ। ব্রাউজারের সাইট সেটিংসে এই সাইটের মাইক্রোফোন চালু করে আবার চেষ্টা করুন।",
+  invalidRecipient: "প্রাপকের ফরম্যাট সঠিক নয়।",
 };
 
 export function translate(lang: Lang, key: CopyKey): string {

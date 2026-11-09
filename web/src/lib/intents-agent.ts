@@ -257,7 +257,7 @@ type AssetMeta = {
   price: number;
 };
 
-type BalanceBook = {
+export type BalanceBook = {
   public: Record<string, bigint>;
   confidential: Record<string, bigint>;
   prices: Record<string, number>;
@@ -317,7 +317,7 @@ function loadState(): PersistedState {
     if (parsed?.version !== 1 || !parsed.policy || !parsed.grant || !parsed.balances) {
       throw new Error("invalid agent state");
     }
-    return parsed;
+    return stripSeedBalances(parsed);
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
       try {
@@ -359,19 +359,36 @@ function createDefaultState(): PersistedState {
       label: "Kotha session",
     },
     balances: {
-      public: {
-        "nep141:wrap.near": humanToAtomic("6.25", 24).toString(),
-        "nep141:usdt.tether-token.near": humanToAtomic("420", 6).toString(),
-        "nep141:usdc.near": humanToAtomic("75.5", 6).toString(),
-      },
-      confidential: {
-        "nep141:wrap.near": humanToAtomic("0.4", 24).toString(),
-        "nep141:usdt.tether-token.near": humanToAtomic("18", 6).toString(),
-        "nep141:usdc.near": humanToAtomic("30", 6).toString(),
-      },
+      public: {},
+      confidential: {},
     },
     prices: Object.fromEntries(KOTHA_ASSETS.map((asset) => [asset.asset_id, asset.price])),
   };
+}
+
+function sameBalanceMap(left: Record<string, string>, right: Record<string, string>): boolean {
+  const leftKeys = Object.keys(left);
+  const rightKeys = Object.keys(right);
+  if (leftKeys.length !== rightKeys.length) return false;
+  return rightKeys.every((key) => left[key] === right[key]);
+}
+
+/** Drop the old demo vault so a persisted file cannot put fake numbers back into the prompt. */
+function stripSeedBalances(state: PersistedState): PersistedState {
+  const seedPublic = {
+    "nep141:wrap.near": humanToAtomic("6.25", 24).toString(),
+    "nep141:usdt.tether-token.near": humanToAtomic("420", 6).toString(),
+    "nep141:usdc.near": humanToAtomic("75.5", 6).toString(),
+  };
+  const seedConfidential = {
+    "nep141:wrap.near": humanToAtomic("0.4", 24).toString(),
+    "nep141:usdt.tether-token.near": humanToAtomic("18", 6).toString(),
+    "nep141:usdc.near": humanToAtomic("30", 6).toString(),
+  };
+  if (sameBalanceMap(state.balances.public, seedPublic) && sameBalanceMap(state.balances.confidential, seedConfidential)) {
+    state.balances = { public: {}, confidential: {} };
+  }
+  return state;
 }
 
 export function defaultPolicy(): ActivePolicy {
@@ -583,12 +600,19 @@ export function previewIntent(intent: AegisIntent, policy: ActivePolicy, balance
 
   const spendShard: "public" | "confidential" =
     intent.action === "shield" ? "public" : intent.action === "unshield" || intent.confidential ? "confidential" : "public";
-  const available = balances[spendShard][origin.asset_id] ?? BigInt(0);
-  if (notional.atomic > available) {
+  const bookEmpty = Object.keys(balances.public).length === 0 && Object.keys(balances.confidential).length === 0;
+  const listed = Object.prototype.hasOwnProperty.call(balances[spendShard], origin.asset_id);
+  if (!listed && bookEmpty) {
     allowed = false;
-    warnings.push(
-      `Insufficient ${spendShard === "confidential" ? "intents.far" : "intents.near"} balance for ${origin.symbol}: available ${atomicToHuman(available, origin.decimals)}, required ${notional.human}.`,
-    );
+    warnings.push("BALANCE_UNAVAILABLE");
+  } else {
+    const available = balances[spendShard][origin.asset_id] ?? BigInt(0);
+    if (notional.atomic > available) {
+      allowed = false;
+      warnings.push(
+        `Insufficient ${spendShard === "confidential" ? "intents.far" : "intents.near"} balance for ${origin.symbol}: available ${atomicToHuman(available, origin.decimals)}, required ${notional.human}.`,
+      );
+    }
   }
   if (txUsd > policy.perTxCapUsd + 1e-9) {
     allowed = false;
@@ -781,7 +805,7 @@ export async function setEmergencyFreeze(frozen: boolean): Promise<{
   });
 }
 
-export async function runDryRunPreview(intentInput: AegisIntent | unknown): Promise<DryRunPreview> {
+export async function runDryRunPreview(intentInput: AegisIntent | unknown, balanceOverride?: BalanceBook | null): Promise<DryRunPreview> {
   const intent = coerceIntent(intentInput);
   if (!intent) {
     throw new AgentOperationError("invalid_intent", "Intent must include a supported action.");
@@ -794,7 +818,7 @@ export async function runDryRunPreview(intentInput: AegisIntent | unknown): Prom
     await syncSpentFromReceipts(state);
     saveState(state);
     const remoteQuote = await tryRemoteDryRun(state, intent);
-    const local = previewIntent(intent, state.policy, bookFromState(state));
+    const local = previewIntent(intent, state.policy, balanceOverride ?? bookFromState(state));
     return mergeRemoteQuote(local, remoteQuote);
   });
 }
@@ -1076,12 +1100,7 @@ async function hydrateRemote(state: PersistedState): Promise<"local-ledger" | "r
   const api = sdkClient();
   if (!api || Date.now() < publicFailUntil) return "local-ledger";
   try {
-    const [agent, policy, publicBalances, confidentialBalances] = await Promise.all([
-      api.getAgent(state.agentId),
-      api.getPolicy(state.agentId),
-      api.getBalances(state.agentId, { source: "public" }),
-      api.getBalances(state.agentId, { source: "confidential" }),
-    ]);
+    const [agent, policy] = await Promise.all([api.getAgent(state.agentId), api.getPolicy(state.agentId)]);
     if (agent.owner && "account_id" in agent.owner && agent.owner.account_id) {
       state.ownerAccount = agent.owner.account_id;
     }
@@ -1092,12 +1111,6 @@ async function hydrateRemote(state: PersistedState): Promise<"local-ledger" | "r
         state.policy.dailyBudgetUsd = finiteNumber(policy.policy.budget.daily_usd, state.policy.dailyBudgetUsd);
       }
       if (typeof policy.revision === "number") state.policyRevision = policy.revision;
-    }
-    const nextPublic = remoteBalanceMap(publicBalances.balances);
-    const nextConfidential = remoteBalanceMap(confidentialBalances.balances);
-    if (Object.keys(nextPublic).length > 0) state.balances.public = { ...state.balances.public, ...nextPublic };
-    if (Object.keys(nextConfidential).length > 0) {
-      state.balances.confidential = { ...state.balances.confidential, ...nextConfidential };
     }
     return "remote";
   } catch {
@@ -1435,8 +1448,8 @@ function toView(state: PersistedState, source: "local-ledger" | "remote"): Agent
 }
 
 function balanceRows(state: PersistedState, shard: "public" | "confidential"): TokenBalanceView[] {
-  const ids = new Set([...Object.keys(state.balances[shard]), ...KOTHA_ASSETS.map((asset) => asset.asset_id)]);
-  return [...ids].map((assetId) => {
+  const ids = Object.keys(state.balances[shard]);
+  return ids.map((assetId) => {
     const meta = assetMeta(assetId);
     const raw = BigInt(state.balances[shard][assetId] ?? "0");
     const human = atomicToHuman(raw, meta.decimals);
@@ -1511,15 +1524,6 @@ function ingestBalanceSide(book: BalanceBook, value: unknown, shard: "public" | 
       book[shard][canonicalAsset(asset)] = BigInt(raw);
     }
   }
-}
-
-function remoteBalanceMap(entries: Array<{ asset_id: string; balance_raw: string; price: number | null }>): Record<string, string> {
-  const out: Record<string, string> = {};
-  for (const entry of entries) {
-    if (!entry.asset_id) continue;
-    out[entry.asset_id] = entry.balance_raw || "0";
-  }
-  return out;
 }
 
 function readPolicyPatch(input: unknown): PolicyPatch {

@@ -17,7 +17,12 @@ const RECORD_LIMIT_MS = 30_000;
 export type ChatMessage = {
   id: string;
   role: "user" | "assistant";
+  lang: Lang;
   text: string;
+  translations?: { bn?: string; en?: string };
+  translating?: boolean;
+  statusCode?: string;
+  errorCode?: string;
   attestation?: AttestedInference;
   dryRun?: DryRunPreview | null;
 };
@@ -34,6 +39,9 @@ export function CopilotPanel({
   frozen,
   teePhase = "idle",
   accountId = "",
+  ownerReady = false,
+  walletConnected = false,
+  nearBalance = null,
   onAutoRedact,
   onSend,
   onDryRun,
@@ -50,6 +58,9 @@ export function CopilotPanel({
   frozen: boolean;
   teePhase?: "idle" | "unverified" | "verified";
   accountId?: string;
+  ownerReady?: boolean;
+  walletConnected?: boolean;
+  nearBalance?: string | null;
   onAutoRedact: (next: boolean) => void;
   onSend: (text: string) => void;
   onDryRun?: () => void;
@@ -60,6 +71,7 @@ export function CopilotPanel({
   const [elapsed, setElapsed] = useState(0);
   const [demoWave, setDemoWave] = useState(false);
   const [voiceNote, setVoiceNote] = useState<string | null>(null);
+  const [micDenied, setMicDenied] = useState(false);
   const scroller = useRef<HTMLDivElement>(null);
   const recorder = useRef<MediaRecorder | null>(null);
   const recordChunks = useRef<Blob[]>([]);
@@ -123,7 +135,7 @@ export function CopilotPanel({
     setListening(false);
   }
 
-  async function startRecorder() {
+  async function startRecorder(pendingStream?: Promise<MediaStream>) {
     const gen = ++captureGen.current;
     recordChunks.current = [];
     discardRecording.current = false;
@@ -131,6 +143,7 @@ export function CopilotPanel({
     if (typeof MediaRecorder === "undefined" || !navigator.mediaDevices?.getUserMedia) {
       listeningRef.current = false;
       setListening(false);
+      setMicDenied(false);
       setVoiceNote(translate(langRef.current, "micUnsupported"));
       return;
     }
@@ -138,8 +151,9 @@ export function CopilotPanel({
     setListening(true);
     setElapsed(0);
     setVoiceNote(null);
+    setMicDenied(false);
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = pendingStream ? await pendingStream : await navigator.mediaDevices.getUserMedia({ audio: true });
       if (captureGen.current !== gen || discardRecording.current) {
         stream.getTracks().forEach((track) => track.stop());
         listeningRef.current = false;
@@ -177,7 +191,9 @@ export function CopilotPanel({
       listeningRef.current = false;
       setListening(false);
       clearRecordTimers();
-      setVoiceNote(translate(langRef.current, micFailureKey(error)));
+      const denied = micFailureKey(error) === "micDenied";
+      setMicDenied(denied);
+      setVoiceNote(translate(langRef.current, denied ? "micDeniedHelp" : micFailureKey(error)));
     }
   }
 
@@ -187,7 +203,14 @@ export function CopilotPanel({
       stopCapture();
       return;
     }
-    void startRecorder();
+    const media = navigator.mediaDevices;
+    if (!media?.getUserMedia || typeof MediaRecorder === "undefined") {
+      setMicDenied(false);
+      setVoiceNote(translate(langRef.current, "micUnsupported"));
+      return;
+    }
+    const pending = media.getUserMedia({ audio: true });
+    void startRecorder(pending);
   }
 
   async function uploadVoice(blob: Blob) {
@@ -353,19 +376,6 @@ export function CopilotPanel({
             <div className="w-full rounded-2xl border border-white/10 bg-black/30 p-4">
               <h2 className="text-base font-semibold text-white">{translate(lang, "welcomeTitle")}</h2>
               <p className="mt-1 text-sm leading-6 text-white/65">{translate(lang, "welcomeBody")}</p>
-              <div className="mt-3 flex flex-col gap-2">
-                {CHIPS.map((key) => (
-                  <button
-                    key={key}
-                    type="button"
-                    disabled={thinking}
-                    onClick={() => submit(translate(lang, key))}
-                    className="rounded-xl border border-white/10 bg-black/25 px-3 py-2 text-left text-sm text-white hover:border-[#00EC97]/40 disabled:opacity-50"
-                  >
-                    {translate(lang, key)}
-                  </button>
-                ))}
-              </div>
             </div>
             </div>
           ) : null}
@@ -376,7 +386,15 @@ export function CopilotPanel({
                 {message.text}
               </div>
             ) : (
-              <AssistantBubble key={message.id} lang={lang} message={message} baseUrl={baseUrl} onDryRun={onDryRun} onExecute={onExecute} />
+              <AssistantBubble
+                key={message.id}
+                lang={lang}
+                message={message}
+                baseUrl={baseUrl}
+                ownerReady={ownerReady}
+                onDryRun={onDryRun}
+                onExecute={onExecute}
+              />
             ),
           )}
           {thinking ? (
@@ -395,6 +413,24 @@ export function CopilotPanel({
             <VoiceWaveform active={listening || demoWave} label={translate(lang, "voiceDemo")} />
           </div>
         ) : null}
+        <div className="border-t border-white/10 px-4 pt-3">
+          <p className="mb-2 text-xs text-white/55">
+            {walletConnected ? `${translate(lang, "nearBalance")}: ${nearBalance ?? "…"}` : translate(lang, "balanceUnavailable")}
+          </p>
+          <div className="flex gap-2 overflow-x-auto pb-1">
+            {CHIPS.map((key) => (
+              <button
+                key={key}
+                type="button"
+                disabled={thinking}
+                onClick={() => submit(translate(lang, key))}
+                className="shrink-0 whitespace-nowrap rounded-full border border-white/10 bg-black/25 px-3 py-2 text-sm text-white hover:border-[#00EC97]/40 disabled:opacity-50"
+              >
+                {translate(lang, key)}
+              </button>
+            ))}
+          </div>
+        </div>
         <form
           className="mt-auto border-t border-white/10 p-4"
           onSubmit={(event) => {
@@ -446,7 +482,15 @@ export function CopilotPanel({
             </p>
           ) : null}
           {uploading ? <p className="mt-2 text-sm text-[#FFB020]">{translate(lang, "transcribing")}</p> : null}
-          {voiceNote && !listening && !uploading ? <p className="mt-2 text-sm text-[#FFB020]" role="status">{voiceNote}</p> : null}
+          {micDenied && !listening && !uploading ? (
+            <div className="mt-2 flex flex-wrap items-center gap-2">
+              <p className="text-sm text-[#FFB020]" role="status">{translate(lang, "micDeniedHelp")}</p>
+              <button type="button" onClick={toggleMic} className="rounded-lg border border-white/15 px-3 py-1 text-sm text-white">
+                {translate(lang, "retry")}
+              </button>
+            </div>
+          ) : null}
+          {voiceNote && !micDenied && !listening && !uploading ? <p className="mt-2 text-sm text-[#FFB020]" role="status">{voiceNote}</p> : null}
         </form>
       </div>
       </SpotlightGlassCard>
@@ -458,18 +502,27 @@ function AssistantBubble({
   lang,
   message,
   baseUrl,
+  ownerReady,
   onDryRun,
   onExecute,
 }: {
   lang: Lang;
   message: ChatMessage;
   baseUrl: string;
+  ownerReady: boolean;
   onDryRun?: () => void;
   onExecute?: () => void;
 }) {
+  const body = visibleText(message, lang);
+  const pendingTranslation = needsTranslation(message, lang);
   const attestation = message.attestation;
   if (!attestation) {
-    return <div className="mr-8 rounded-2xl border border-[#FF8A00]/30 bg-[#FF8A00]/8 px-3 py-2 text-sm text-white">{displayReply(message.text)}</div>;
+    return (
+      <div className="mr-8 rounded-2xl border border-[#FF8A00]/30 bg-[#FF8A00]/8 px-3 py-2 text-sm text-white">
+        {displayReply(body)}
+        {pendingTranslation ? <p className="mt-1 text-xs text-white/50">{translate(lang, "translating")}</p> : null}
+      </div>
+    );
   }
   const decision = attestation.decision;
   const redaction = attestation.redaction;
@@ -484,7 +537,7 @@ function AssistantBubble({
       <div className="mb-2 text-[10px] uppercase tracking-[0.16em] text-[#00EC97]">KOTHA</div>
       <div className="mb-2 flex flex-wrap gap-2">
         <span
-          title={attestation.verification.reason}
+          title={translate(lang, serverVerified ? "teeVerifiedTip" : "teeUnverifiedTip")}
           className={cn(
             "max-w-full whitespace-normal break-words rounded-full border px-2 py-0.5 font-mono text-[10px] leading-snug",
             serverVerified
@@ -497,8 +550,8 @@ function AssistantBubble({
         <Badge className={riskTone(decision.risk_score)}>
           {translate(lang, "risk")} {decision.risk_score}
         </Badge>
-        <Badge className={policyTone(decision.policy_status)} title={decision.policy_reason}>
-          {translate(lang, policyKey(decision.policy_status))}
+        <Badge className={policyTone(decision.policy_status)} title={policyTip(lang, decision.policy_status, decision.policy_reason)}>
+          {translate(lang, policyKey(message.statusCode || decision.policy_status))}
         </Badge>
         <span
           className={cn(
@@ -514,8 +567,17 @@ function AssistantBubble({
             : ""}
         </span>
       </div>
-      <p className="text-sm leading-relaxed text-white/90">{displayReply(decision.explanation)}</p>
-      <ActionCard lang={lang} intentAmount={decision.intent?.amount} fallbackText={decision.explanation} onDryRun={onDryRun} onExecute={onExecute} />
+      <p className="text-sm leading-relaxed text-white/90">{displayReply(body)}</p>
+      {pendingTranslation ? <p className="mt-1 text-xs text-white/50">{translate(lang, "translating")}</p> : null}
+      <ActionCard
+        lang={lang}
+        intentAmount={decision.intent?.amount}
+        fallbackText={body}
+        status={decision.policy_status}
+        ownerReady={ownerReady}
+        onDryRun={onDryRun}
+        onExecute={onExecute}
+      />
       <details className="mt-3 rounded-xl border border-[#00EC97]/20 bg-[#00EC97]/5 px-3 py-2">
         <summary className="cursor-pointer text-sm font-medium text-[#b8ffe0]">{translate(lang, "showDetails")}</summary>
         <div className="mt-2">
@@ -547,7 +609,7 @@ function AssistantBubble({
             tamperedLabel={translate(lang, "tamperedBadge")}
             tamperLabel={translate(lang, "tamper")}
             restoreLabel={translate(lang, "restoreSignature")}
-            reason={attestation.verification.reason}
+            reason={translate(lang, serverVerified ? "teeVerifiedTip" : "teeUnverifiedTip")}
           />
         </div>
       </details>
@@ -559,12 +621,16 @@ function ActionCard({
   lang,
   intentAmount,
   fallbackText,
+  status,
+  ownerReady,
   onDryRun,
   onExecute,
 }: {
   lang: Lang;
   intentAmount?: string;
   fallbackText: string;
+  status: PolicyStatus;
+  ownerReady: boolean;
   onDryRun?: () => void;
   onExecute?: () => void;
 }) {
@@ -572,15 +638,25 @@ function ActionCard({
   const fromIntent = Number.isFinite(numeric) && numeric > 0;
   const fromText = readActionCard(fallbackText);
   if (!fromIntent && !fromText) return null;
+  const enabled = ownerReady && status === "PASS";
+  const tip = !ownerReady ? translate(lang, "connectOwner") : status !== "PASS" ? translate(lang, "blockedByPolicy") : undefined;
   return (
     <div className="mt-3 rounded-2xl border border-white/10 bg-black/30 p-3">
       <div className="flex flex-wrap gap-2">
         <button type="button" onClick={onDryRun} className="h-9 rounded-xl border border-white/15 px-3 text-sm text-white">
           {translate(lang, "dryRun")}
         </button>
-        <button type="button" onClick={onExecute} className="h-9 rounded-xl bg-[#00EC97] px-3 text-sm font-semibold text-[#04140d]">
-          {translate(lang, "executeButton")}
-        </button>
+        <span title={tip} className="inline-flex">
+          <button
+            type="button"
+            disabled={!enabled}
+            aria-disabled={!enabled}
+            onClick={enabled ? onExecute : undefined}
+            className="h-9 rounded-xl bg-[#00EC97] px-3 text-sm font-semibold text-[#04140d] disabled:cursor-not-allowed disabled:opacity-40"
+          >
+            {translate(lang, "executeButton")}
+          </button>
+        </span>
       </div>
     </div>
   );
@@ -623,10 +699,35 @@ function Badge({ children, className, title }: { children: ReactNode; className:
   );
 }
 
-function policyKey(status: PolicyStatus): CopyKey {
+function policyKey(status: string): CopyKey {
   if (status === "WARNING") return "warning";
   if (status === "BLOCKED") return "blocked";
+  if (status === "QUESTION") return "pass";
   return "pass";
+}
+
+function policyTip(lang: Lang, status: PolicyStatus, reason: string): string {
+  if (reason === "BALANCE_UNAVAILABLE") return translate(lang, "balanceUnavailable");
+  if (reason === "INVALID_RECIPIENT_FORMAT") return translate(lang, "invalidRecipient");
+  if (reason === "QUESTION" || status === "PASS") return translate(lang, "pass");
+  if (status === "WARNING") return translate(lang, "warning");
+  return translate(lang, "blockedByPolicy");
+}
+
+function visibleText(message: ChatMessage, lang: Lang): string {
+  if (message.errorCode === "free_limit") return translate(lang, "freeLimit");
+  if (message.errorCode === "wallet_limit") return translate(lang, "walletLimit");
+  if (message.errorCode === "voice_too_long") return translate(lang, "voiceTooLong");
+  if (message.errorCode === "load_fail") return translate(lang, "loadFail");
+  if ((lang === "bn" || lang === "en") && message.translations?.[lang]) return message.translations[lang] || message.text;
+  return message.text;
+}
+
+function needsTranslation(message: ChatMessage, lang: Lang): boolean {
+  if (message.role !== "assistant" || message.errorCode) return false;
+  if (lang !== "bn" && lang !== "en") return false;
+  if (message.lang === lang) return false;
+  return Boolean(message.translating) && !message.translations?.[lang];
 }
 
 function policyTone(status: PolicyStatus): string {
@@ -657,12 +758,10 @@ const STEP_KEYS = ["stepRedact", "stepThink", "stepVerify", "stepPolicy"] as con
 
 function StepLoader({ lang, step }: { lang: Lang; step: LoaderStep | null }) {
   const target = step ? Math.max(0, LOADER_STEPS.indexOf(step)) : 0;
-  const [shown, setShown] = useState(0);
+  const [shown, setShown] = useState(target);
   useEffect(() => {
-    if (shown >= target) return;
-    const timer = window.setTimeout(() => setShown((current) => Math.min(target, current + 1)), 280);
-    return () => window.clearTimeout(timer);
-  }, [shown, target]);
+    setShown(target);
+  }, [target]);
   return (
     <p className="flex flex-wrap items-center gap-x-1 gap-y-1 font-mono text-[11px] leading-snug" aria-live="polite">
       {STEP_KEYS.map((key, index) => (

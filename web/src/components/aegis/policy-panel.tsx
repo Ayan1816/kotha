@@ -27,6 +27,7 @@ export function PolicyPanel({
   revokeBusy,
   ownerLock = null,
   grantNotice = null,
+  showGrant = true,
   onSave,
   onRotate,
   onRevoke,
@@ -41,6 +42,7 @@ export function PolicyPanel({
   revokeBusy: boolean;
   ownerLock?: string | null;
   grantNotice?: string | null;
+  showGrant?: boolean;
   onSave: (patch: PolicyPatch) => Promise<void>;
   onRotate: () => void;
   onRevoke: () => void;
@@ -185,7 +187,7 @@ export function PolicyPanel({
         </div>
       </SpotlightGlassCard>
 
-      <SpotlightGlassCard alert={frozen || grant.revoked}>
+      {showGrant ? <SpotlightGlassCard alert={frozen || grant.revoked}>
         <div className="space-y-3 p-4">
           <div>
             <h2 className="text-xl font-semibold text-white">{grantNotice || translate(lang, "grantTitle")}</h2>
@@ -245,7 +247,11 @@ export function PolicyPanel({
             </span>
           </div>
         </div>
-      </SpotlightGlassCard>
+      </SpotlightGlassCard> : (
+        <SpotlightGlassCard>
+          <p className="p-4 text-sm text-white/70">{translate(lang, "grantConnect")}</p>
+        </SpotlightGlassCard>
+      )}
     </div>
   );
 }

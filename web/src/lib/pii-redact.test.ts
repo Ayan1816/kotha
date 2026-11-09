@@ -104,6 +104,17 @@ describe("emails, IDs, cards, and seed phrases", () => {
     assert.deepEqual(result.types, ["phone", "email"]);
   });
 
+  it("keeps NEAR account ids and still redacts a phone", () => {
+    const mixed = redact("Send 0.01 NEAR to alice.testnet and +14155550199");
+    assert.match(mixed.text, /alice\.testnet/);
+    assert.equal(mixed.text.includes("+14155550199"), false);
+    assert.match(mixed.text, /\[REDACTED_PHONE\]/);
+    const implicit = "ab".repeat(32);
+    const kept = redact(`pay ${implicit} now`);
+    assert.equal(kept.text.includes(implicit), true);
+    assert.equal(kept.count, 0);
+  });
+
   it("leaves amounts and account ids alone", () => {
     const swap = "আমার ২ NEAR দিয়ে USDT কিনে দাও";
     assert.equal(redact(swap).text, swap);
@@ -164,5 +175,21 @@ describe("NEAR AI privacy filter", () => {
     const dropped = await redactSensitiveText("call 01711223344", { apiKey: "test-key", fetchImpl: dropping });
     assert.equal(dropped.redactedText, "call [REDACTED_PHONE]");
     assert.equal(dropped.redactionsCount, 1);
+  });
+
+  it("restores a NEAR account the privacy filter removed", async () => {
+    const fetchImpl: typeof fetch = async (_input, init) => {
+      const payload = JSON.parse(String(init?.body ?? "{}")) as { input?: string };
+      assert.match(payload.input ?? "", /NEARACCT0/);
+      assert.equal((payload.input ?? "").includes("alice.testnet"), false);
+      return Response.json({ redacted_text: "Send 0.01 NEAR to someone and [REDACTED_PHONE]" });
+    };
+    const result = await redactSensitiveText("Send 0.01 NEAR to alice.testnet and +14155550199", {
+      apiKey: "test-key",
+      fetchImpl,
+    });
+    assert.match(result.redactedText, /alice\.testnet/);
+    assert.equal(result.redactedText.includes("+14155550199"), false);
+    assert.match(result.redactedText, /\[REDACTED_PHONE\]/);
   });
 });

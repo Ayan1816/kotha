@@ -2,7 +2,7 @@
 
 import { useKothaSession } from "@/app/providers";
 import { ApiKeyCard } from "@/components/aegis/api-key-card";
-import { DeckRequestError, fetchDashboard, fetchTeeCatalog, postAdminLock, postAdminUnlock, postDryRun, postExecute, postFreeze, postGrant, postPolicy, postSaveTx, postTeeChatStream } from "@/components/aegis/api";
+import { DeckRequestError, fetchDashboard, fetchTeeCatalog, postAdminLock, postAdminUnlock, postDryRun, postExecute, postFreeze, postGrant, postPolicy, postSaveTx, postTeeChatStream, postTranslate } from "@/components/aegis/api";
 import type { ChainLink } from "@/components/aegis/audit-panel";
 import { CopilotPanel, type ChatMessage } from "@/components/aegis/copilot-panel";
 import { translate, type Lang } from "@/components/aegis/copy";
@@ -28,6 +28,7 @@ import {
   txHashFromOutcome,
   walletRecordCall,
 } from "@/lib/wallet-proof";
+import { yoctoToNear } from "near-api-js";
 import { useNearWallet } from "near-connect-hooks";
 import dynamic from "next/dynamic";
 import type {
@@ -41,7 +42,9 @@ import type {
   PolicyPatch,
   PublicGrant,
 } from "@/lib/dashboard-types";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+
+const MESSAGE_KEY = "kotha-messages";
 
 const ProofsTable = dynamic(() => import("@/components/aegis/audit-panel").then((mod) => mod.ProofsTable), { ssr: false });
 
@@ -62,6 +65,8 @@ export function CommandDeck() {
   const [model, setModel] = useState<ChatModelId>("deepseek/deepseek-v3.2");
   const [autoRedact, setAutoRedact] = useState(true);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [messagesReady, setMessagesReady] = useState(false);
+  const [nearBalance, setNearBalance] = useState<string | null>(null);
   const [quote, setQuote] = useState<ArmedQuote | null>(null);
   const [quoteError, setQuoteError] = useState<string | null>(null);
   const [revealedToken, setRevealedToken] = useState<string | null>(null);
@@ -77,6 +82,9 @@ export function CommandDeck() {
   const [adminCode, setAdminCode] = useState("");
   const near = useNearWallet();
   const session = useKothaSession();
+  const balanceReader = useRef(near.getBalance);
+  balanceReader.current = near.getBalance;
+  const translateFlight = useRef(new Set<string>());
 
   const frozen = dashboard?.agentState.frozen ?? dashboard?.agentState.policy.frozen ?? false;
   const accountId = (near.signedAccountId || "").trim();
@@ -103,6 +111,89 @@ export function CommandDeck() {
       // First paint stays English when storage is blocked.
     }
   }, []);
+
+  useEffect(() => {
+    try {
+      const raw = window.localStorage.getItem(MESSAGE_KEY);
+      if (raw) setMessages(readStoredMessages(JSON.parse(raw) as unknown));
+    } catch {
+      // A blocked or corrupt store starts from an empty transcript.
+    }
+    setMessagesReady(true);
+  }, []);
+
+  useEffect(() => {
+    if (!messagesReady) return;
+    try {
+      window.localStorage.setItem(MESSAGE_KEY, JSON.stringify(messages.map(slimMessage)));
+    } catch {
+      // Quota or a private window must not block the live transcript.
+    }
+  }, [messages, messagesReady]);
+
+  useEffect(() => {
+    if (!accountId) {
+      setNearBalance(null);
+      return;
+    }
+    let live = true;
+    setNearBalance(null);
+    void balanceReader
+      .current(accountId)
+      .then((value) => {
+        if (live) setNearBalance(`${yoctoToNear(value, 4)} NEAR`);
+      })
+      .catch(() => {
+        if (live) setNearBalance(null);
+      });
+    return () => {
+      live = false;
+    };
+  }, [accountId]);
+
+  useEffect(() => {
+    if (!messagesReady || (lang !== "bn" && lang !== "en")) return;
+    const pending = messages.filter((message) => {
+      if (message.role !== "assistant" || message.errorCode) return false;
+      if (message.lang !== "bn" && message.lang !== "en") return false;
+      if (message.lang === lang || message.translations?.[lang]) return false;
+      return !translateFlight.current.has(`${message.id}:${lang}`);
+    });
+    if (pending.length === 0) return;
+    const keys = pending.map((message) => `${message.id}:${lang}`);
+    for (const key of keys) translateFlight.current.add(key);
+    const target = lang;
+    setMessages((current) => current.map((message) => (pending.some((item) => item.id === message.id) ? { ...message, translating: true } : message)));
+    void Promise.all(
+      pending.map(async (message) => {
+        try {
+          const text = await postTranslate({ text: message.text, target, accountId });
+          return { id: message.id, text };
+        } catch {
+          return { id: message.id, text: message.text };
+        }
+      }),
+    ).then((results) => {
+      for (const key of keys) translateFlight.current.delete(key);
+      setMessages((current) =>
+        current.map((message) => {
+          const found = results.find((item) => item.id === message.id);
+          if (!found) return message;
+          return {
+            ...message,
+            translating: false,
+            translations: { ...message.translations, [target]: found.text },
+          };
+        }),
+      );
+    });
+  }, [accountId, lang, messages, messagesReady]);
+
+  useEffect(() => {
+    if (thinking || chatStep == null) return;
+    const timer = window.setTimeout(() => setChatStep(null), 0);
+    return () => window.clearTimeout(timer);
+  }, [thinking, chatStep]);
 
   const refresh = useCallback(async () => {
     const next = await fetchDashboard();
@@ -164,14 +255,18 @@ export function CommandDeck() {
     setChatStep("redacting");
     void refreshRemittance(text);
     setLiveText("");
-    setMessages((current) => [...current, { id, role: "user", text }]);
+    setMessages((current) => [...current, { id, role: "user", lang: textLang(text, lang), text }]);
     try {
       const result = await run("chat", async () => {
         return postTeeChatStream(
           { message: text, model, autoRedact, locale: lang, accountId },
           {
             onStep: (step) => setChatStep(step),
-            onDelta: (next) => setLiveText(next),
+            onDelta: (next) => {
+              setLiveText(next);
+              setChatStep((current) => (current === "redacting" ? "thinking" : current));
+            },
+            onDone: () => setChatStep(null),
           },
         );
       });
@@ -179,12 +274,17 @@ export function CommandDeck() {
       const preview = result.dryRun;
       const invalid = intent && preview ? invalidAmountReason(intent, preview.warnings) : null;
       setTeePhase(result.attestation.verification.status === "verified" ? "verified" : "unverified");
+      const reply = displayReply(result.attestation.decision.explanation);
+      const replyLang = textLang(reply, lang);
       setMessages((current) => [
         ...current,
         {
           id: crypto.randomUUID(),
           role: "assistant",
-          text: displayReply(result.attestation.decision.explanation),
+          lang: replyLang,
+          text: reply,
+          translations: replyLang === "bn" || replyLang === "en" ? { [replyLang]: reply } : {},
+          statusCode: result.attestation.decision.policy_status,
           attestation: result.attestation,
           dryRun: invalid ? null : preview,
         },
@@ -207,8 +307,18 @@ export function CommandDeck() {
         execution: null,
       });
     } catch (error) {
+      const code = aiLimitCode(error);
       const message = aiLimitText(lang, error) || (error instanceof Error ? error.message : translate(lang, "loadFail"));
-      setMessages((current) => [...current, { id: crypto.randomUUID(), role: "assistant", text: message }]);
+      setMessages((current) => [
+        ...current,
+        {
+          id: crypto.randomUUID(),
+          role: "assistant",
+          lang,
+          text: code ? "" : message,
+          errorCode: code || (message === translate(lang, "loadFail") ? "load_fail" : undefined),
+        },
+      ]);
       setQuote(null);
       setTeePhase("unverified");
       if (isAmountError(message, error)) setQuoteError(translate(lang, "invalidAmount"));
@@ -510,6 +620,9 @@ export function CommandDeck() {
             frozen={frozen}
             teePhase={teePhase}
             accountId={accountId}
+            ownerReady={admin || (Boolean(accountId) && (!ownerConfigured || accountId === configuredOwnerId()))}
+            walletConnected={Boolean(accountId)}
+            nearBalance={accountId ? nearBalance : null}
             onAutoRedact={setAutoRedact}
             onSend={(text) => void send(text)}
             onDryRun={() => {
@@ -571,6 +684,7 @@ export function CommandDeck() {
               revokeBusy={busy === "revoke"}
               ownerLock={ownerLock}
               grantNotice={grantNotice}
+              showGrant={Boolean(accountId)}
               onSave={savePolicy}
               onRotate={() => void rotate()}
               onRevoke={() => void revoke()}
@@ -653,6 +767,68 @@ function sameIntent(left: AegisIntent, right: AegisIntent): boolean {
     left.recipient === right.recipient &&
     left.confidential === right.confidential
   );
+}
+
+function aiLimitCode(error: unknown): string {
+  if (!(error instanceof DeckRequestError)) return "";
+  if (error.code === "free_limit" || error.code === "wallet_limit") return error.code;
+  return "";
+}
+
+function textLang(text: string, ui: Lang): Lang {
+  if (/[\u0980-\u09FF]/.test(text)) return "bn";
+  if (/[A-Za-z]{2,}/.test(text)) return "en";
+  return ui === "bn" ? "bn" : "en";
+}
+
+function readStoredMessages(value: unknown): ChatMessage[] {
+  if (!Array.isArray(value)) return [];
+  const out: ChatMessage[] = [];
+  for (const item of value) {
+    if (!item || typeof item !== "object") continue;
+    const record = item as Record<string, unknown>;
+    if (typeof record.id !== "string" || (record.role !== "user" && record.role !== "assistant") || typeof record.text !== "string") continue;
+    const bag = record.translations && typeof record.translations === "object" ? (record.translations as { bn?: unknown; en?: unknown }) : {};
+    const translations: { bn?: string; en?: string } = {};
+    if (typeof bag.bn === "string") translations.bn = bag.bn;
+    if (typeof bag.en === "string") translations.en = bag.en;
+    const lang = record.lang === "bn" || record.lang === "en" || record.lang === "es" || record.lang === "ar" || record.lang === "hi" || record.lang === "fr" || record.lang === "zh" ? record.lang : "en";
+    out.push({
+      id: record.id,
+      role: record.role,
+      lang,
+      text: record.text,
+      translations,
+      statusCode: typeof record.statusCode === "string" ? record.statusCode : undefined,
+      errorCode: typeof record.errorCode === "string" ? record.errorCode : undefined,
+      attestation: record.attestation as ChatMessage["attestation"],
+      dryRun: (record.dryRun as ChatMessage["dryRun"]) ?? null,
+    });
+  }
+  return out.slice(-40);
+}
+
+function slimMessage(message: ChatMessage): ChatMessage {
+  const attestation = message.attestation;
+  if (!attestation) return { ...message, translating: false };
+  return {
+    ...message,
+    translating: false,
+    attestation: {
+      ...attestation,
+      intel_quote: "",
+      nvidia_payload: "",
+      rawResponseText: "",
+      hardware: null,
+      request: {
+        model: attestation.model,
+        stream: true,
+        max_tokens: 800,
+        response_format: { type: "json_object" },
+        messages: [],
+      },
+    },
+  };
 }
 
 function aiLimitText(lang: Lang, error: unknown): string {

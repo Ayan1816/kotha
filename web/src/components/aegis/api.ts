@@ -114,9 +114,25 @@ export async function postTeeChat(body: { message: string; model: string; autoRe
   return readTeeChat(data);
 }
 
+export async function postTranslate(body: { text: string; target: "bn" | "en"; accountId?: string }): Promise<string> {
+  const { accountId, ...payload } = body;
+  const response = await fetch("/api/translate", {
+    method: "POST",
+    credentials: "include",
+    headers: aiHeaders({ "content-type": "application/json" }, accountId),
+    body: JSON.stringify(payload),
+  });
+  const data = await readJson(response);
+  if (!response.ok) throw fail(data, response.status);
+  if (!isRecord(data) || typeof data.text !== "string" || !data.text.trim()) {
+    throw new DeckRequestError("translate_failed", "Translation failed.");
+  }
+  return data.text.trim();
+}
+
 export async function postTeeChatStream(
   body: { message: string; model: string; autoRedact: boolean; locale?: string; accountId?: string },
-  handlers: { onStep?: (step: LoaderStep) => void; onDelta?: (text: string) => void } = {},
+  handlers: { onStep?: (step: LoaderStep) => void; onDelta?: (text: string) => void; onDone?: () => void } = {},
 ): Promise<TeeChatResponse> {
   const { accountId, ...payload } = body;
   const response = await fetch("/api/tee-chat", {
@@ -134,6 +150,7 @@ export async function postTeeChatStream(
   const decoder = new TextDecoder();
   let buffer = "";
   let donePayload: TeeChatResponse | null = null;
+  try {
   while (true) {
     const chunk = await reader.read();
     if (chunk.done) break;
@@ -159,6 +176,9 @@ export async function postTeeChatStream(
   }
   if (!donePayload) throw new DeckRequestError("bad_response", "TEE chat stream ended before a result.");
   return donePayload;
+  } finally {
+    handlers.onDone?.();
+  }
 }
 
 function readTeeChat(data: unknown): TeeChatResponse {

@@ -1,8 +1,11 @@
 import { NextResponse } from "next/server";
-import { limitAiRequest } from "@/lib/ai-rate-limit";
-import { getAgentState, runDryRunPreview } from "@/lib/intents-agent";
+import { connectedWalletAccount, limitAiRequest } from "@/lib/ai-rate-limit";
+import { getAgentState, runDryRunPreview, type BalanceBook } from "@/lib/intents-agent";
+import { nearBalanceBook, unavailableBalanceContext, viewAccountYocto, walletBalanceContext } from "@/lib/near-balance";
 import { isTeeModel, normalizeChatLocale, readEnclaveTelemetry, runAttestedInference, TEE_MODELS, type ChatLocale } from "@/lib/near-ai-tee";
 import type { LoaderStep } from "@/lib/chat-stream";
+
+type ChatBalance = { balancesContext: unknown; balanceBook: BalanceBook | null };
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -40,12 +43,15 @@ export async function POST(request: Request) {
   if (!limited.ok) {
     return NextResponse.json({ error: { code: limited.code, message: limited.message } }, { status: 429 });
   }
+  const balance = await loadChatBalance(request);
   const input = {
     message,
     model: typeof record.model === "string" ? record.model : undefined,
     autoRedact: record.autoRedact !== false,
     locale: normalizeChatLocale(record.locale),
     apiKey: callerKey(request),
+    balancesContext: balance.balancesContext,
+    balanceBook: balance.balanceBook,
   };
   if (record.stream === true) return streamChat(input);
   try {
@@ -56,13 +62,14 @@ export async function POST(request: Request) {
   }
 }
 
-async function streamChat(input: { message: string; model?: string; autoRedact: boolean; locale: ChatLocale; apiKey: string | null }) {
+async function streamChat(input: ChatInput) {
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
     async start(controller) {
       const send = (event: string, data: unknown) => {
         controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
       };
+      let terminal = false;
       try {
         send("step", { step: "redacting" satisfies LoaderStep });
         const attestation = await infer(input, {
@@ -72,13 +79,22 @@ async function streamChat(input: { message: string; model?: string; autoRedact: 
           onDelta: (text) => send("delta", { text }),
         });
         send("step", { step: "policy" satisfies LoaderStep });
-        const dryRun = attestation.decision.intent ? await runDryRunPreview(attestation.decision.intent) : null;
+        const dryRun = attestation.decision.intent ? await runDryRunPreview(attestation.decision.intent, input.balanceBook) : null;
         send("done", { attestation, dryRun });
+        terminal = true;
       } catch (error) {
         const messageText = error instanceof Error ? error.message : "TEE inference failed.";
         const status = messageText.startsWith("Unsupported TEE model") ? 400 : 500;
         send("error", { error: { code: status === 400 ? "unsupported_model" : "tee_failed", message: messageText } });
+        terminal = true;
       } finally {
+        if (!terminal) {
+          try {
+            send("error", { error: { code: "tee_failed", message: "TEE inference failed." } });
+          } catch {
+            // The stream may already be closed.
+          }
+        }
         controller.close();
       }
     },
@@ -92,16 +108,23 @@ async function streamChat(input: { message: string; model?: string; autoRedact: 
   });
 }
 
-async function runChat(input: { message: string; model?: string; autoRedact: boolean; locale: ChatLocale; apiKey: string | null }) {
+type ChatInput = {
+  message: string;
+  model?: string;
+  autoRedact: boolean;
+  locale: ChatLocale;
+  apiKey: string | null;
+  balancesContext: unknown;
+  balanceBook: BalanceBook | null;
+};
+
+async function runChat(input: ChatInput) {
   const attestation = await infer(input);
-  const dryRun = attestation.decision.intent ? await runDryRunPreview(attestation.decision.intent) : null;
+  const dryRun = attestation.decision.intent ? await runDryRunPreview(attestation.decision.intent, input.balanceBook) : null;
   return { attestation, dryRun };
 }
 
-async function infer(
-  input: { message: string; model?: string; autoRedact: boolean; locale: ChatLocale; apiKey: string | null },
-  hooks?: { onStep?: (step: LoaderStep) => void; onDelta?: (text: string) => void },
-) {
+async function infer(input: ChatInput, hooks?: { onStep?: (step: LoaderStep) => void; onDelta?: (text: string) => void }) {
   const state = await getAgentState();
   return runAttestedInference({
     userMessage: input.message,
@@ -110,10 +133,18 @@ async function infer(
     locale: input.locale,
     apiKey: input.apiKey,
     policyContext: state.policy,
-    balancesContext: state.balances,
+    balancesContext: input.balancesContext,
     onStep: hooks?.onStep,
     onDelta: hooks?.onDelta,
   });
+}
+
+async function loadChatBalance(request: Request): Promise<ChatBalance> {
+  const account = connectedWalletAccount(request.headers.get("x-kotha-account"));
+  if (!account) return { balancesContext: unavailableBalanceContext(), balanceBook: null };
+  const yocto = await viewAccountYocto(account);
+  if (!yocto) return { balancesContext: unavailableBalanceContext(), balanceBook: null };
+  return { balancesContext: walletBalanceContext(account, yocto), balanceBook: nearBalanceBook(yocto) };
 }
 
 function callerKey(request: Request): string | null {
