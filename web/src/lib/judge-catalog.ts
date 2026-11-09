@@ -99,7 +99,7 @@ export const PILLARS = [
       { id: "model", title: "Chat model", body: `Requests go to NEAR AI with model ${TEE_CHAT_MODEL} and stream: true. The route emits SSE steps redacting, thinking, verifying, and policy. A non-stream JSON completion is still accepted when the gateway returns JSON.` },
       { id: "signature", title: "Signature verification", body: "After the chat body returns, Kotha GETs /v1/signature/{chat_id} and /v1/attestation/report with the NEAR AI key. Verified requires ECDSA recovery of a report signing_address AND the hash inside the signed text equaling SHA-256 of the raw HTTP body." },
       { id: "honesty", title: "What stays unverified", body: "SSE is assembled only to read the chat id and the explanation. If the gateway signs different bytes than the raw body, status stays unverified and execute stays blocked. Kotha does not invent a TDX or NVIDIA quote and does not request a second non-stream completion to force a match." },
-      { id: "voice", title: "Voice fallback", body: `SpeechRecognition streams interim and final words into the chat input. getUserMedia is not called at the same time. MediaRecorder plus POST /api/voice-transcribe runs only when speechCtor() is null and forwards audio to ${WHISPER_MODEL}.` },
+      { id: "voice", title: "Voice fallback", body: `The mic records with MediaRecorder and posts multipart file plus language (bn or en) to /api/voice-transcribe, which forwards audio to ${WHISPER_MODEL}. The returned text fills the chat input and is sent. SpeechRecognition is not used.` },
       { id: "pii", title: "Dual-layer PII redaction", body: `Local patterns cover Bangladesh mobiles (including Bengali digits), global E.164, email, NID, passport, bKash/Nagad, Luhn cards, and 12/24 BIP39 seeds. Tokens are [REDACTED_PHONE|EMAIL|ID|CARD|SEED]. When the key is set, a second POST uses ${PRIVACY_FILTER_MODEL}. Account ids and amounts stay visible.` },
     ],
   },
@@ -120,7 +120,7 @@ export const PILLARS = [
 export const SCOPE_ROWS = [
   {
     surface: "Wallet login",
-    live: "NearProvider defaults to mainnet with autoConnect and no features filter. signIn() opens the NEAR Connect modal. NEP-413 signatures are checked against RPC view_access_key_list and near-api-js verifyMessage.",
+    live: "NearProvider defaults to NEXT_PUBLIC_NETWORK or testnet, with autoConnect and no features filter. signIn() opens the NEAR Connect modal. Escape, the backdrop, and Cancel close it. NEP-413 signatures are checked against RPC view_access_key_list and near-api-js verifyMessage.",
     boundary: "HOT Wallet, Meteor, Intear, Nightly, and MyNearWallet stay available. A .near account uses https://rpc.mainnet.near.org. A .testnet account uses the testnet RPC.",
   },
   {
@@ -130,8 +130,8 @@ export const SCOPE_ROWS = [
   },
   {
     surface: "Voice",
-    live: "SpeechRecognition (en-US, bn-BD, es-ES, ar-SA, hi-IN, fr-FR, zh-CN) streams into the chat input. When speechCtor() is null, audio is posted to /api/voice-transcribe and forwarded to openai/whisper-large-v3.",
-    boundary: "getUserMedia is never started beside SpeechRecognition. A recognition error does not switch to the recorder. A missing API key returns 200 JSON with fallback true.",
+    live: "MediaRecorder posts audio/webm to /api/voice-transcribe with language bn or en. Whisper returns {text}, which fills the input and sends. Recording stops at 30 seconds.",
+    boundary: "SpeechRecognition is not used. Permission, missing microphone, unsupported browser, and transcription errors stay on screen and clear the listening state. A missing API key returns an error JSON body.",
   },
   {
     surface: "Dry-run",

@@ -7,7 +7,7 @@
     "build": "next build --turbopack",
     "start": "next start",
     "lint": "eslint",
-    "test": "node --experimental-strip-types --import ./scripts/register-ts.mjs --test src/lib/pii-redact.test.ts src/lib/receipt.test.ts src/lib/receipt-fallback.test.ts src/lib/budget-math.test.ts src/lib/wallet-proof.test.ts src/lib/wallet-verify.test.ts src/lib/chat-stream.test.ts src/lib/voice-transcribe.test.ts src/lib/judge-portal.test.ts src/lib/phone-resolver.test.ts"
+    "test": "node --experimental-strip-types --import ./scripts/register-ts.mjs --test src/lib/pii-redact.test.ts src/lib/receipt.test.ts src/lib/receipt-fallback.test.ts src/lib/budget-math.test.ts src/lib/wallet-proof.test.ts src/lib/wallet-verify.test.ts src/lib/chat-stream.test.ts src/lib/voice-transcribe.test.ts src/lib/judge-portal.test.ts src/lib/phone-resolver.test.ts src/lib/transfer-parse.test.ts"
   },
   "dependencies": {
     "@hot-labs/near-connect": "^0.11.4",

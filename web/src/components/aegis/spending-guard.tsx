@@ -39,7 +39,7 @@ export function SpendingGuard({
 }) {
   const limit = policy.dailyBudgetUsd > 0 ? policy.dailyBudgetUsd : 1;
   const used = Math.max(0, Math.min(100, (policy.spentTodayUsd / limit) * 100));
-  const dryTitle = ownerLock || (intent ? undefined : translate(lang, "noIntentReason"));
+  const dryTitle = intent ? undefined : translate(lang, "noIntentReason");
   const executeTitle = ownerLock || executeReason || undefined;
   const freezeTitle = ownerLock || undefined;
 
@@ -61,6 +61,7 @@ export function SpendingGuard({
           {quoteError}
         </p>
       ) : null}
+      {intent && dryRun ? <DryRunCard lang={lang} dryRun={dryRun} /> : null}
       <div className="mt-6 flex flex-wrap gap-2">
         <GuardButton label={translate(lang, "dryRun")} title={dryTitle} busy={quoteBusy} disabled={Boolean(dryTitle)} onClick={onDryRun} tone="ghost" />
         <GuardButton label={translate(lang, "executeButton")} title={executeTitle} busy={executeBusy} disabled={Boolean(executeTitle)} onClick={onExecute} tone="primary" />
@@ -84,6 +85,25 @@ export function SpendingGuard({
         </div>
       </details>
     </section>
+  );
+}
+
+function DryRunCard({ lang, dryRun }: { lang: Lang; dryRun: DryRunPreview }) {
+  const impact = dryRun.budgetImpact;
+  const remaining = Math.max(0, impact.dailyLimitUsd - impact.projectedSpentUsd);
+  return (
+    <div className={`mt-4 rounded-2xl border p-4 ${dryRun.allowed ? "border-[#00EC97]/40 bg-[#00EC97]/10" : "border-[#FF3B5C]/50 bg-[#FF3B5C]/10"}`}>
+      <p className={`text-sm font-semibold uppercase ${dryRun.allowed ? "text-[#00EC97]" : "text-[#ffb3c0]"}`}>
+        {dryRun.allowed ? translate(lang, "pass") : translate(lang, "blocked")}
+      </p>
+      <p className="mt-2 text-sm text-white">
+        {translate(lang, "projectedSpend")} ${impact.projectedSpentUsd.toFixed(2)} = {translate(lang, "usedToday")} ${impact.currentSpentUsd.toFixed(2)} + ${impact.txUsd.toFixed(2)}
+      </p>
+      <p className="mt-1 text-sm text-white/80">
+        {translate(lang, "remainingLimit")} ${remaining.toFixed(2)}
+      </p>
+      {dryRun.warnings[0] ? <p className="mt-2 text-sm text-[#ffd7a1]">{dryRun.warnings[0]}</p> : null}
+    </div>
   );
 }
 

@@ -11,16 +11,7 @@ import { Mic, MicOff, Send, Shield } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 const CHIPS = ["chipSwap", "chipRemit", "chipShield", "chipSecurity"] as const;
-
-const SPEECH_LANG: Record<Lang, string> = {
-  en: "en-US",
-  bn: "bn-BD",
-  es: "es-ES",
-  ar: "ar-SA",
-  hi: "hi-IN",
-  fr: "fr-FR",
-  zh: "zh-CN",
-};
+const RECORD_LIMIT_MS = 30_000;
 
 export type ChatMessage = {
   id: string;
@@ -28,20 +19,6 @@ export type ChatMessage = {
   text: string;
   attestation?: AttestedInference;
   dryRun?: DryRunPreview | null;
-};
-
-type SpeechAlternative = { transcript: string };
-type SpeechResult = ArrayLike<SpeechAlternative> & { isFinal?: boolean };
-
-type SpeechSession = {
-  lang: string;
-  continuous: boolean;
-  interimResults: boolean;
-  onresult: ((event: { results: ArrayLike<SpeechResult> }) => void) | null;
-  onerror: (() => void) | null;
-  onend: (() => void) | null;
-  start: () => void;
-  stop: () => void;
 };
 
 export function CopilotPanel({
@@ -77,24 +54,20 @@ export function CopilotPanel({
 }) {
   const [input, setInput] = useState("");
   const [listening, setListening] = useState(false);
+  const [elapsed, setElapsed] = useState(0);
   const [demoWave, setDemoWave] = useState(false);
   const [voiceNote, setVoiceNote] = useState<string | null>(null);
-  const [micLang, setMicLang] = useState<Lang>(lang);
   const scroller = useRef<HTMLDivElement>(null);
-  const session = useRef<SpeechSession | null>(null);
   const recorder = useRef<MediaRecorder | null>(null);
   const recordChunks = useRef<Blob[]>([]);
   const discardRecording = useRef(false);
-  const speechText = useRef("");
-  const hintRef = useRef("");
-  const settled = useRef(false);
   const captureGen = useRef(0);
   const listeningRef = useRef(false);
-  const micPinned = useRef(false);
-  const micLangRef = useRef(lang);
   const langRef = useRef(lang);
   langRef.current = lang;
-  micLangRef.current = micLang;
+  const recordLimit = useRef<number | null>(null);
+  const recordTick = useRef<number | null>(null);
+  const recordStarted = useRef(0);
   const [uploading, setUploading] = useState(false);
   const demoTimer = useRef<number | null>(null);
   const thinkingRef = useRef(thinking);
@@ -109,19 +82,11 @@ export function CopilotPanel({
   }, [messages, thinking, liveText, chatStep]);
 
   useEffect(() => {
-    if (!micPinned.current) setMicLang(lang);
-  }, [lang]);
-
-  useEffect(() => {
     return () => {
       discardRecording.current = true;
       listeningRef.current = false;
       captureGen.current += 1;
-      try {
-        session.current?.stop();
-      } catch {
-        // Recognition may already be stopped.
-      }
+      clearRecordTimers();
       if (recorder.current && recorder.current.state !== "inactive") recorder.current.stop();
       if (demoTimer.current != null) window.clearTimeout(demoTimer.current);
     };
@@ -134,105 +99,46 @@ export function CopilotPanel({
     onSendRef.current(message);
   }
 
-  function liveTranscript(): string {
-    return (speechText.current || hintRef.current).trim();
+  function clearRecordTimers() {
+    if (recordLimit.current != null) window.clearTimeout(recordLimit.current);
+    if (recordTick.current != null) window.clearInterval(recordTick.current);
+    recordLimit.current = null;
+    recordTick.current = null;
   }
 
   function stopCapture() {
     captureGen.current += 1;
-    listeningRef.current = false;
-    setListening(false);
-    try {
-      session.current?.stop();
-    } catch {
-      // Recognition may already be stopped.
-    }
-    session.current = null;
+    clearRecordTimers();
     const rec = recorder.current;
     if (rec && rec.state !== "inactive") {
       rec.stop();
       return;
     }
-    const text = liveTranscript();
-    speechText.current = "";
-    hintRef.current = "";
-    if (text) {
-      setInput(text);
-      setVoiceNote(null);
-      submit(text);
-    }
+    listeningRef.current = false;
+    setListening(false);
   }
 
-  function startRecognition(ctor: new () => SpeechSession) {
+  async function startRecorder() {
     const gen = ++captureGen.current;
-    settled.current = false;
-    speechText.current = "";
-    hintRef.current = "";
-    listeningRef.current = true;
-    setListening(true);
-    setVoiceNote(translate(langRef.current, "tapStopSend"));
-    const recognition = new ctor();
-    recognition.lang = SPEECH_LANG[micLangRef.current];
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    recognition.onresult = (event) => {
-      let finalText = "";
-      let interim = "";
-      for (let index = 0; index < event.results.length; index += 1) {
-        const result = event.results[index];
-        const piece = result?.[0]?.transcript ?? "";
-        if (result?.isFinal) finalText += piece;
-        else interim += piece;
-      }
-      const live = `${finalText}${interim}`.trim();
-      if (finalText.trim()) speechText.current = finalText.trim();
-      hintRef.current = live;
-      if (live) setInput(live);
-    };
-    recognition.onerror = () => {
-      if (settled.current || captureGen.current !== gen) return;
-      settled.current = true;
-      listeningRef.current = false;
-      setListening(false);
-      setVoiceNote(translate(langRef.current, "voiceUnavailable"));
-    };
-    recognition.onend = () => {
-      if (settled.current || captureGen.current !== gen || !listeningRef.current) return;
-      recognition.lang = SPEECH_LANG[micLangRef.current];
-      try {
-        recognition.start();
-      } catch {
-        // The browser can reject a restart that overlaps the previous session.
-      }
-    };
-    session.current = recognition;
-    try {
-      recognition.start();
-    } catch {
-      session.current = null;
-      listeningRef.current = false;
-      setListening(false);
-      setVoiceNote(translate(langRef.current, "micMissing"));
-    }
-  }
-
-  async function startRecorderFallback() {
-    const gen = ++captureGen.current;
-    settled.current = false;
-    speechText.current = "";
-    hintRef.current = "";
     recordChunks.current = [];
+    discardRecording.current = false;
+    clearRecordTimers();
     if (typeof MediaRecorder === "undefined" || !navigator.mediaDevices?.getUserMedia) {
-      setVoiceNote(translate(langRef.current, "micMissing"));
+      listeningRef.current = false;
+      setListening(false);
+      setVoiceNote(translate(langRef.current, "micUnsupported"));
       return;
     }
     listeningRef.current = true;
     setListening(true);
-    setVoiceNote(translate(langRef.current, "micUpload"));
+    setElapsed(0);
+    setVoiceNote(null);
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       if (captureGen.current !== gen || discardRecording.current) {
         stream.getTracks().forEach((track) => track.stop());
+        listeningRef.current = false;
+        setListening(false);
         return;
       }
       const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((item) => MediaRecorder.isTypeSupported(item)) || "";
@@ -242,20 +148,28 @@ export function CopilotPanel({
       };
       rec.onstop = () => {
         stream.getTracks().forEach((track) => track.stop());
+        clearRecordTimers();
         listeningRef.current = false;
         setListening(false);
-        if (discardRecording.current || settled.current) return;
-        settled.current = true;
+        if (discardRecording.current) return;
         const blob = new Blob(recordChunks.current, { type: rec.mimeType || "audio/webm" });
-        if (blob.size > 0) void uploadVoice(blob, hintRef.current);
+        if (blob.size > 0) void uploadVoice(blob);
         else setVoiceNote(translate(langRef.current, "voiceUnavailable"));
       };
       recorder.current = rec;
       rec.start();
-    } catch {
+      recordStarted.current = Date.now();
+      recordTick.current = window.setInterval(() => {
+        setElapsed(Math.min(30, Math.floor((Date.now() - recordStarted.current) / 1000)));
+      }, 250);
+      recordLimit.current = window.setTimeout(() => {
+        if (captureGen.current === gen) stopCapture();
+      }, RECORD_LIMIT_MS);
+    } catch (error) {
       listeningRef.current = false;
       setListening(false);
-      setVoiceNote(translate(langRef.current, "micMissing"));
+      clearRecordTimers();
+      setVoiceNote(translate(langRef.current, micFailureKey(error)));
     }
   }
 
@@ -265,46 +179,38 @@ export function CopilotPanel({
       stopCapture();
       return;
     }
-    const ctor = speechCtor();
-    if (ctor) {
-      startRecognition(ctor);
-      return;
-    }
-    void startRecorderFallback();
+    void startRecorder();
   }
 
-  function cycleMicLanguage() {
-    const order: Lang[] = ["en", "bn"];
-    if (lang !== "en" && lang !== "bn") order.push(lang);
-    const index = order.indexOf(micLangRef.current);
-    const next = order[(index + 1) % order.length] ?? "en";
-    micPinned.current = true;
-    micLangRef.current = next;
-    setMicLang(next);
-  }
-
-  async function uploadVoice(blob: Blob, hint: string) {
+  async function uploadVoice(blob: Blob) {
     setUploading(true);
+    setListening(false);
+    listeningRef.current = false;
     setVoiceNote(translate(langRef.current, "transcribing"));
+    const controller = new AbortController();
+    const timer = window.setTimeout(() => controller.abort(), RECORD_LIMIT_MS);
     try {
       const form = new FormData();
-      form.set("audio", blob, "speech.webm");
-      form.set("language", langRef.current);
-      form.set("hint", hint);
-      const response = await fetch("/api/voice-transcribe", { method: "POST", body: form });
-      const data = (await response.json().catch(() => null)) as { text?: string; fallback?: boolean; message?: string; error?: { message?: string } } | null;
+      form.set("file", blob, blob.type.includes("mp4") ? "speech.mp4" : "speech.webm");
+      form.set("language", langRef.current === "bn" ? "bn" : "en");
+      const response = await fetch("/api/voice-transcribe", { method: "POST", body: form, signal: controller.signal });
+      const data = (await response.json().catch(() => null)) as { text?: string; error?: string; message?: string } | null;
       const text = typeof data?.text === "string" ? data.text.trim() : "";
-      if (text) {
+      if (response.ok && text) {
         setInput(text);
-        setVoiceNote(data?.fallback ? translate(langRef.current, "voiceFallback") : null);
+        setVoiceNote(null);
         submit(text);
         return;
       }
-      setVoiceNote(data?.message || data?.error?.message || translate(langRef.current, "voiceUnavailable"));
+      setVoiceNote(data?.error || data?.message || translate(langRef.current, "voiceUnavailable"));
     } catch (error) {
-      setVoiceNote(error instanceof Error ? error.message : translate(langRef.current, "voiceUnavailable"));
+      const aborted = error instanceof Error && error.name === "AbortError";
+      setVoiceNote(aborted ? translate(langRef.current, "micTimeout") : error instanceof Error ? error.message : translate(langRef.current, "voiceUnavailable"));
     } finally {
+      window.clearTimeout(timer);
       setUploading(false);
+      setListening(false);
+      listeningRef.current = false;
     }
   }
 
@@ -361,7 +267,8 @@ export function CopilotPanel({
 
         <div ref={scroller} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4" aria-live="polite">
           {messages.length === 0 && !thinking ? (
-            <div className="mx-auto max-w-lg rounded-2xl border border-white/10 bg-black/30 p-4">
+            <div className="mx-auto flex min-h-[50vh] w-full max-w-lg flex-col items-center justify-center">
+            <div className="w-full rounded-2xl border border-white/10 bg-black/30 p-4">
               <h2 className="text-base font-semibold text-white">{translate(lang, "welcomeTitle")}</h2>
               <p className="mt-1 text-sm leading-6 text-white/65">{translate(lang, "welcomeBody")}</p>
               <div className="mt-3 flex flex-col gap-2">
@@ -377,6 +284,7 @@ export function CopilotPanel({
                   </button>
                 ))}
               </div>
+            </div>
             </div>
           ) : null}
           {messages.map((message) =>
@@ -415,15 +323,6 @@ export function CopilotPanel({
           <div className="flex items-end gap-2">
             <button
               type="button"
-              aria-label={translate(lang, "micLanguage")}
-              title={translate(lang, "micLanguage")}
-              onClick={cycleMicLanguage}
-              className="inline-flex h-11 shrink-0 items-center rounded-xl border border-white/10 px-2 text-xs font-semibold text-white"
-            >
-              {micLangLabel(micLang)}
-            </button>
-            <button
-              type="button"
               title={translate(lang, "voiceHint")}
               aria-label={listening ? translate(lang, "micStop") : translate(lang, "mic")}
               aria-pressed={listening}
@@ -459,8 +358,13 @@ export function CopilotPanel({
               {translate(lang, "send")}
             </button>
           </div>
-          {listening ? <p className="mt-2 text-sm text-[#00EC97]">{translate(lang, "tapStopSend")}</p> : null}
-          {voiceNote && !listening ? <p className="mt-2 text-sm text-[#FFB020]" role="status">{voiceNote}</p> : null}
+          {listening ? (
+            <p className="mt-2 text-sm text-[#00EC97]">
+              {formatClock(elapsed)} / 0:30
+            </p>
+          ) : null}
+          {uploading ? <p className="mt-2 text-sm text-[#FFB020]">{translate(lang, "transcribing")}</p> : null}
+          {voiceNote && !listening && !uploading ? <p className="mt-2 text-sm text-[#FFB020]" role="status">{voiceNote}</p> : null}
         </form>
       </div>
       </SpotlightGlassCard>
@@ -600,10 +504,16 @@ function ActionCard({
   );
 }
 
-function micLangLabel(code: Lang): string {
-  if (code === "en") return "EN";
-  if (code === "bn") return "বাংলা";
-  return code.toUpperCase();
+function formatClock(total: number): string {
+  const seconds = Math.max(0, Math.min(30, total));
+  return `0:${String(seconds).padStart(2, "0")}`;
+}
+
+function micFailureKey(error: unknown): CopyKey {
+  const name = error instanceof DOMException || error instanceof Error ? error.name : "";
+  if (name === "NotAllowedError" || name === "PermissionDeniedError" || name === "SecurityError") return "micDenied";
+  if (name === "NotFoundError" || name === "DevicesNotFoundError" || name === "OverconstrainedError") return "micNone";
+  return "micUnsupported";
 }
 
 function Badge({ children, className, title }: { children: ReactNode; className: string; title?: string }) {
@@ -669,13 +579,4 @@ function StepLoader({ lang, step }: { lang: Lang; step: LoaderStep | null }) {
 function modeLabel(lang: Lang, mode: AttestedInference["mode"]): string {
   if (mode === "hardware-tee") return translate(lang, "modeHardware");
   return translate(lang, "modeUnverified");
-}
-
-function speechCtor(): (new () => SpeechSession) | null {
-  if (typeof window === "undefined") return null;
-  const host = window as Window & {
-    SpeechRecognition?: new () => SpeechSession;
-    webkitSpeechRecognition?: new () => SpeechSession;
-  };
-  return host.SpeechRecognition ?? host.webkitSpeechRecognition ?? null;
 }

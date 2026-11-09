@@ -1,27 +1,16 @@
 "use client";
 
-import { translate, type CopyKey, type Lang } from "@/components/aegis/copy";
+import { translate, type Lang } from "@/components/aegis/copy";
 import { WalletButton } from "@/components/WalletButton";
-import { useKothaSession, type KothaNetwork } from "@/app/providers";
-import { useEffect, useRef, useState } from "react";
+import { allowsMainnet, useKothaSession, type KothaNetwork } from "@/app/providers";
 
 export type TeePhase = "idle" | "unverified" | "verified";
-
-const LANGS: Array<{ id: Lang; key: CopyKey }> = [
-  { id: "en", key: "langEnglish" },
-  { id: "bn", key: "langBengali" },
-  { id: "es", key: "langSpanish" },
-  { id: "ar", key: "langArabic" },
-  { id: "hi", key: "langHindi" },
-  { id: "fr", key: "langFrench" },
-  { id: "zh", key: "langChinese" },
-];
 
 export function TelemetryBar({ lang, onLang }: { lang: Lang; onLang: (lang: Lang) => void }) {
   const { network, setNetwork } = useKothaSession();
   const brand = lang === "bn" ? translate(lang, "brandMark") : translate(lang, "brand");
   return (
-    <header className="fixed inset-x-0 top-0 z-50 flex h-16 w-full flex-nowrap items-center justify-between gap-2 overflow-hidden border-b border-white/10 bg-[#05070b] px-3 sm:px-6">
+    <header className="fixed inset-x-0 top-0 z-50 flex h-16 w-full flex-nowrap items-center justify-between gap-2 border-b border-white/10 bg-[#05070b] px-3 sm:px-6">
       <div className="flex min-w-0 items-center gap-2">
         <Crest />
         <span className="truncate text-sm font-semibold text-white sm:text-base" title={brand}>
@@ -30,7 +19,7 @@ export function TelemetryBar({ lang, onLang }: { lang: Lang; onLang: (lang: Lang
       </div>
       <div className="flex shrink-0 items-center gap-1 sm:gap-2">
         <NetworkToggle lang={lang} network={network} onNetwork={setNetwork} />
-        <LanguageMenu lang={lang} onLang={onLang} />
+        <LanguageToggle lang={lang} onLang={onLang} />
         <WalletButton lang={lang} />
       </div>
     </header>
@@ -46,74 +35,40 @@ function NetworkToggle({
   network: KothaNetwork;
   onNetwork: (network: KothaNetwork) => void;
 }) {
+  if (!allowsMainnet() || network !== "mainnet") {
+    return (
+      <span className="inline-flex h-9 items-center rounded-full border border-[#FFB020]/70 bg-[#FFB020]/15 px-2 text-[11px] font-semibold tracking-wide text-[#FFB020] uppercase sm:px-3 sm:text-xs">
+        {translate(lang, "testnetBadge")}
+      </span>
+    );
+  }
   return (
-    <div className="inline-flex h-9 items-center rounded-full border border-white/15 p-0.5" role="group" aria-label={translate(lang, "networkHint")}>
-      {(["mainnet", "testnet"] as const).map((id) => {
-        const selected = network === id;
-        const label = translate(lang, id === "mainnet" ? "networkMainnet" : "networkTestnet");
-        return (
-          <button
-            key={id}
-            type="button"
-            aria-pressed={selected}
-            onClick={() => onNetwork(id)}
-            className={`h-8 rounded-full px-2 text-[11px] font-semibold tracking-wide uppercase sm:px-3 sm:text-xs ${selected ? "bg-[#00EC97] text-[#04140d]" : "text-white/70"}`}
-          >
-            {label}
-          </button>
-        );
-      })}
-    </div>
+    <button
+      type="button"
+      aria-pressed
+      title={translate(lang, "networkHint")}
+      onClick={() => onNetwork("testnet")}
+      className="inline-flex h-9 items-center rounded-full border border-[#00EC97]/40 bg-[#00EC97]/10 px-2 text-[11px] font-semibold tracking-wide text-[#d9ffe8] uppercase sm:px-3 sm:text-xs"
+    >
+      {translate(lang, "networkMainnet")}
+    </button>
   );
 }
 
-function LanguageMenu({ lang, onLang }: { lang: Lang; onLang: (lang: Lang) => void }) {
-  const [open, setOpen] = useState(false);
-  const root = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (!open) return;
-    function onPointer(event: MouseEvent) {
-      if (!root.current?.contains(event.target as Node)) setOpen(false);
-    }
-    document.addEventListener("mousedown", onPointer);
-    return () => document.removeEventListener("mousedown", onPointer);
-  }, [open]);
+function LanguageToggle({ lang, onLang }: { lang: Lang; onLang: (lang: Lang) => void }) {
+  const next = lang === "bn" ? "en" : "bn";
   return (
-    <div className="relative" ref={root}>
-      <button
-        type="button"
-        aria-haspopup="listbox"
-        aria-expanded={open}
-        aria-label={translate(lang, "languageLabel")}
-        onClick={() => setOpen((current) => !current)}
-        className="inline-flex h-9 items-center gap-1 whitespace-nowrap rounded-full border border-white/15 px-2 text-xs sm:px-3 sm:text-sm"
-      >
-        <span aria-hidden="true">🌐</span>
-        <span>{translate(lang, "languageLabel")}</span>
-      </button>
-      {open ? (
-        <div role="listbox" className="absolute right-0 z-50 mt-2 w-44 rounded-2xl border border-white/10 bg-[#07110d] p-1 text-sm shadow-[0_16px_40px_rgba(0,0,0,0.45)]">
-          {LANGS.map((item) => {
-            const selected = lang === item.id;
-            return (
-              <button
-                key={item.id}
-                type="button"
-                role="option"
-                aria-selected={selected}
-                onClick={() => {
-                  onLang(item.id);
-                  setOpen(false);
-                }}
-                className={`block w-full rounded-xl px-3 py-2 text-left ${selected ? "bg-[#00EC97]/15 text-[#b8ffe0]" : "text-white hover:bg-white/5"}`}
-              >
-                {translate(lang, item.key)}
-              </button>
-            );
-          })}
-        </div>
-      ) : null}
-    </div>
+    <button
+      type="button"
+      aria-label="বাংলা | EN"
+      title={translate(lang, "languageLabel")}
+      onClick={() => onLang(next)}
+      className="inline-flex h-9 items-center whitespace-nowrap rounded-full border border-white/15 px-2 text-xs font-semibold sm:px-3 sm:text-sm"
+    >
+      <span className={lang === "bn" ? "text-[#00EC97]" : "text-white/45"}>বাংলা</span>
+      <span className="px-1 text-white/30">|</span>
+      <span className={lang === "en" ? "text-[#00EC97]" : "text-white/45"}>EN</span>
+    </button>
   );
 }
 

@@ -73,7 +73,9 @@ export function isOwnerSigned(accountId: string, expected = configuredOwnerId())
 }
 
 export function strictOwnerMode(): boolean {
-  return process.env.NEXT_PUBLIC_STRICT_OWNER === "true";
+  const flag = process.env.NEXT_PUBLIC_STRICT_OWNER;
+  if (flag == null || flag.trim() === "") return true;
+  return flag === "true";
 }
 
 export function connectedMayAct(accountId: string | null | undefined, expected = configuredOwnerId()): boolean {

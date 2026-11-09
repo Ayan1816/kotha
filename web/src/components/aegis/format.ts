@@ -102,7 +102,7 @@ export function signatureCurl(baseUrl: string, chatId: string, model: string): s
 
 export function attestationCurl(baseUrl: string, model: string, nonce: string): string {
   const root = baseUrl.replace(/\/$/, "") || "https://cloud-api.near.ai/v1";
-  const url = `${root}/attestation/report?model=${encodeURIComponent(model)}&nonce=${encodeURIComponent(nonce)}`;
+  const url = `${root}/attestation/report?model=${encodeURIComponent(model)}&signing_algo=ecdsa&nonce=${encodeURIComponent(nonce)}`;
   return `curl -sS ${shellQuote(url)} -H ${shellQuote("Authorization: Bearer $NEAR_AI_CLOUD_API_KEY")}`;
 }
 

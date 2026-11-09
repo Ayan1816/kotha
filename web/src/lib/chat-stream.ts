@@ -71,30 +71,51 @@ export function partialExplanation(buffer: string): string {
   return fromBuffer ? displayReply(fromBuffer) : "";
 }
 
+const CHAT_TEXT_KEYS = ["reply", "explanation", "message", "text", "content"] as const;
+
 export function displayReply(text: string): string {
   const trimmed = text.trim();
   if (!trimmed) return text;
   const source = trimmed.replace(/^```(?:json)?\s*/i, "").replace(/\s*```$/, "").trim();
-  if (!source.startsWith("{") && !source.startsWith("[")) return text;
-  try {
-    const parsed = JSON.parse(source) as unknown;
-    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return text;
-    const record = parsed as Record<string, unknown>;
-    const reply = typeof record.reply === "string" ? record.reply.trim() : "";
-    const explanation = typeof record.explanation === "string" ? record.explanation.trim() : "";
-    const chosen = reply || explanation;
-    if (!chosen) return text;
-    if (chosen !== text && (chosen.startsWith("{") || chosen.startsWith("["))) {
-      const nested = displayReply(chosen);
-      if (nested !== chosen) return nested;
-    }
-    return chosen;
-  } catch {
-    const reply = readJsonStringField(source, "reply");
-    if (reply) return reply;
-    const explanation = readJsonStringField(source, "explanation");
-    return explanation || text;
+  return unwrapChatText(source, 0) || (source.startsWith("{") || source.startsWith("[") ? "" : source);
+}
+
+function unwrapChatText(source: string, depth: number): string {
+  if (depth > 4) return "";
+  const start = source.indexOf("{");
+  const end = source.lastIndexOf("}");
+  if (start < 0 || end <= start) {
+    if (!source.startsWith("{") && !source.startsWith("[")) return source;
+    return firstJsonString(source);
   }
+  const slice = source.slice(start, end + 1);
+  try {
+    const parsed = JSON.parse(slice) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return source.startsWith("{") ? "" : source;
+    const record = parsed as Record<string, unknown>;
+    for (const key of CHAT_TEXT_KEYS) {
+      const value = record[key];
+      if (typeof value !== "string" || !value.trim()) continue;
+      const inner = value.trim();
+      const nested = inner.includes("{") ? unwrapChatText(inner, depth + 1) : inner;
+      if (nested && !nested.trim().startsWith("{")) return nested;
+    }
+    if ("reply" in record || "explanation" in record || "action" in record) {
+      return `${source.slice(0, start)} ${source.slice(end + 1)}`.replace(/\s+/g, " ").trim();
+    }
+  } catch {
+    const pulled = firstJsonString(slice);
+    if (pulled) return pulled.includes("{") ? unwrapChatText(pulled, depth + 1) : pulled;
+  }
+  return source.startsWith("{") ? "" : source;
+}
+
+function firstJsonString(source: string): string {
+  for (const key of CHAT_TEXT_KEYS) {
+    const value = readJsonStringField(source, key).trim();
+    if (value) return value;
+  }
+  return "";
 }
 
 export function readActionCard(text: string): { action: string; amount: number } | null {

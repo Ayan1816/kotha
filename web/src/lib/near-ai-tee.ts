@@ -1,4 +1,5 @@
 import { createHash, randomBytes } from "crypto";
+import { ed25519 } from "@noble/curves/ed25519.js";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { redactSensitiveText } from "./pii-redact";
@@ -65,7 +66,7 @@ export type AttestedInference = {
   nonce: string;
   signature: string;
   signing_address: string;
-  signing_algo: "ecdsa";
+  signing_algo: "ecdsa" | "ed25519";
   intel_quote: string;
   nvidia_payload: string;
   redaction: RedactionResult | null;
@@ -84,7 +85,7 @@ export type EnclaveTelemetry = {
   provider: "NEAR AI Cloud";
   cpu_tee: "Intel TDX";
   gpu_tee: "NVIDIA H100 TEE";
-  signing_algo: "ecdsa";
+  signing_algo: "ecdsa" | "ed25519";
   base_url: string;
   key_configured: boolean;
   status: "live" | "unreachable" | "unconfigured";
@@ -119,16 +120,18 @@ export function normalizeChatLocale(value: unknown): ChatLocale {
   return typeof value === "string" && (CHAT_LOCALES as readonly string[]).includes(value) ? (value as ChatLocale) : "en";
 }
 
-function systemPrompt(locale: ChatLocale): string {
+function systemPrompt(locale: ChatLocale, userMessage = ""): string {
   const name = LOCALE_NAME[locale];
+  const bangla = locale === "bn" || /[\u0980-\u09FF]/.test(userMessage);
   const identity =
     locale === "bn"
       ? "You are Kotha (কথা), the Bangla-first verifiable confidential voice DeFi and cross-chain remittance copilot on NEAR. Tagline: Speak. Verify. Execute."
       : "You are Kotha, the verifiable confidential voice DeFi and cross-chain remittance copilot on NEAR. Tagline: Speak. Verify. Execute.";
-  const language =
-    locale === "en"
-      ? "Reply 100% in English. Never reply in Bengali unless the user wrote Bengali. The reply and explanation fields are natural language, never a JSON string."
-      : `Reply 100% in ${name}. Do not answer in any other language unless the user wrote in that language. The reply and explanation fields are natural language, never a JSON string.`;
+  const language = bangla
+    ? "Always reply in the same language as the user. If the user writes Bengali, reply in Bengali. The reply and explanation fields are natural language, never a JSON string."
+    : locale === "en"
+      ? "Always reply in the same language as the user. If the user writes Bengali, reply in Bengali. Reply 100% in English when the user writes English. The reply and explanation fields are natural language, never a JSON string."
+      : `Always reply in the same language as the user. If the user writes Bengali, reply in Bengali. Reply 100% in ${name} when that is the user's language. The reply and explanation fields are natural language, never a JSON string.`;
   const demos =
     locale === "bn"
       ? [
@@ -330,7 +333,7 @@ export async function readEnclaveTelemetry(apiKey?: string | null): Promise<Encl
   }
   const nonce = randomBytes(32).toString("hex");
   const report = await fetchEvidence(
-    `${base}/attestation/report?model=${encodeURIComponent(model)}&nonce=${nonce}`,
+    `${base}/attestation/report?model=${encodeURIComponent(model)}&signing_algo=ecdsa&nonce=${nonce}`,
     key,
     "attestation",
   );
@@ -404,7 +407,7 @@ function buildChatRequest(
     stream: true,
     response_format: { type: "json_object" },
     messages: [
-      { role: "system", content: systemPrompt(locale) },
+      { role: "system", content: systemPrompt(locale, userMessage) },
       { role: "user", content: userContent },
     ],
   };
@@ -458,7 +461,7 @@ async function attestHardware(args: {
       "signature",
     ),
     fetchEvidence(
-      `${base}/attestation/report?model=${encodeURIComponent(args.model)}&nonce=${nonce}`,
+      `${base}/attestation/report?model=${encodeURIComponent(args.model)}&signing_algo=ecdsa&nonce=${nonce}`,
       args.apiKey,
       "attestation",
     ),
@@ -483,6 +486,7 @@ async function attestHardware(args: {
     intel_quote: checked.intel_quote,
     nvidia_payload: checked.nvidia_payload,
     verification: checked.verification,
+    signingAlgo: checked.signingAlgo,
     hardware: {
       chat_status: args.chatStatus,
       signature: signatureResult.json,
@@ -546,6 +550,7 @@ function packInference(args: {
   signing_address: string;
   intel_quote: string;
   nvidia_payload: string;
+  signingAlgo?: "ecdsa" | "ed25519";
   verification: TeeVerification;
   hardware: AttestedInference["hardware"];
 }): AttestedInference {
@@ -558,7 +563,7 @@ function packInference(args: {
     nonce: args.nonce,
     signature: args.signature,
     signing_address: args.signing_address,
-    signing_algo: "ecdsa",
+    signing_algo: args.signingAlgo ?? "ecdsa",
     intel_quote: args.intel_quote,
     nvidia_payload: args.nvidia_payload,
     redaction: args.redaction,
@@ -607,9 +612,9 @@ function resolveDecision(
   if (isScriptedKothaPrompt(foldPrompt(userMessage))) return local;
   if (!modelDecision) return local;
   const explanation = displayReply(modelDecision.explanation).trim() || local.explanation;
-  const intent = modelDecision.intent ?? local.intent;
+  const intent = applyParsedTransfer(modelDecision.intent ?? local.intent, userMessage);
   if (local.policy_status === "BLOCKED" && local.intent && modelDecision.policy_status !== "BLOCKED") {
-    return { ...local, explanation };
+    return { ...local, explanation, intent: applyParsedTransfer(local.intent, userMessage) };
   }
   return { ...modelDecision, explanation, intent };
 }
@@ -731,6 +736,37 @@ function bilingualExplanation(
   return `${english} বাংলা নীতি: ${status}।`;
 }
 
+const RECIPIENT_RE = /(?:to|কে)\s+([a-z0-9_\-.]+\.(?:near|testnet))/i;
+const RECIPIENT_BEFORE_RE = /([a-z0-9_\-.]+\.(?:near|testnet))\s*(?:কে|(?:to)\b)/i;
+
+export type ParsedTransfer = { amount: string; token: string; recipient: string };
+
+export function parseTransferCommand(message: string): ParsedTransfer | null {
+  const folded = foldPrompt(message);
+  const recipient = folded.match(RECIPIENT_RE)?.[1] || folded.match(RECIPIENT_BEFORE_RE)?.[1] || "";
+  const amountMatch = folded.match(/([0-9]+(?:\.[0-9]+)?)\s*(usdc|usdt|near|wnear)\b/i);
+  if (!recipient || !amountMatch?.[1] || !amountMatch[2]) return null;
+  if (/^intents\.(?:near|far)$/i.test(recipient)) return null;
+  const token = amountMatch[2].toLowerCase() === "wnear" ? "wNEAR" : amountMatch[2].toUpperCase();
+  return { amount: amountMatch[1].replace(/,/g, ""), token, recipient };
+}
+
+function applyParsedTransfer(intent: AegisIntent | null, message: string): AegisIntent | null {
+  if (!intent) return intent;
+  const parsed = parseTransferCommand(message);
+  if (!parsed) return intent;
+  if (intent.action !== "transfer" && intent.action !== "withdraw") return intent;
+  const asset = canonicalAsset(parsed.token);
+  return {
+    ...intent,
+    amount: parsed.amount,
+    recipient: parsed.recipient,
+    origin_asset: asset || intent.origin_asset,
+    destination_asset: asset || intent.destination_asset,
+    amount_usd_estimate: estimatedUsd(asset || intent.origin_asset, parsed.amount),
+  };
+}
+
 function parseUserIntent(message: string): { intent: AegisIntent; assumedAmount: boolean } | null {
   const action = detectAction(message);
   if (!action) return null;
@@ -823,6 +859,8 @@ function destinationFor(action: IntentAction, assets: string[], origin: string):
 }
 
 function detectRecipient(text: string, action: IntentAction): string {
+  const directed = text.match(RECIPIENT_RE)?.[1] || text.match(RECIPIENT_BEFORE_RE)?.[1];
+  if (directed && !/^intents\.(?:near|far)$/i.test(directed)) return directed;
   const near = text.match(/\b([a-z0-9][a-z0-9._-]{0,62}\.(?:near|testnet|tg))\b/i);
   if (near && !/^intents\.(?:near|far)$/i.test(near[1])) return near[1];
   const evm = text.match(/\b(0x[a-fA-F0-9]{40})\b/);
@@ -832,8 +870,8 @@ function detectRecipient(text: string, action: IntentAction): string {
   }
   if (action === "shield") return "intents.far";
   if (action === "unshield" || action === "swap") return "intents.near";
-  if (/\bcontractor\b/i.test(text)) return "contractor.aegis.testnet";
-  if (action === "withdraw") return "owner.aegis.testnet";
+  if (/\bcontractor\b/i.test(text)) return process.env.NEXT_PUBLIC_CONTRACT_ID?.trim() || "contractor.kotha.testnet";
+  if (action === "withdraw") return process.env.NEXT_PUBLIC_OWNER_ID?.trim() || "owner.kotha.testnet";
   return "";
 }
 
@@ -1125,6 +1163,7 @@ function verifyCloudEvidence(args: {
   intel_quote: string;
   nvidia_payload: string;
   matchedResponseSha256: string;
+  signingAlgo: "ecdsa" | "ed25519";
 } {
   const signatureRecord = asRecord(args.signatureBody);
   const signature = signatureRecord ? stringField(signatureRecord, ["signature"]) : "";
@@ -1140,6 +1179,7 @@ function verifyCloudEvidence(args: {
     intel_quote: intel,
     nvidia_payload: nvidia,
     matchedResponseSha256: "",
+    signingAlgo: "ecdsa" as const,
   });
   if (!signature) {
     const detail = args.signatureError ? ` (${args.signatureError})` : "";
@@ -1150,9 +1190,6 @@ function verifyCloudEvidence(args: {
     return fail(`attestation report did not include a signing_address${detail}`);
   }
   const reportedAlgo = signatureRecord ? stringField(signatureRecord, ["signing_algo", "signingAlgo"]).toLowerCase() : "";
-  if (reportedAlgo && reportedAlgo !== "ecdsa") {
-    return fail(`signature signing_algo is ${reportedAlgo}, not ecdsa`);
-  }
   const parsedText = parseSignedPayload(signedText);
   if (!parsedText) return fail("signed text did not include a response hash");
   const matchedResponseSha256 = matchingResponseHash(parsedText.responseHash, args.responseCandidates);
@@ -1166,25 +1203,49 @@ function verifyCloudEvidence(args: {
   const selected = selectReportEntries(entries, kind);
   if (selected.length === 0) return fail("attestation report did not include a signing_address");
   const ecdsaEntries = selected.filter((entry) => !entry.algo || entry.algo.toLowerCase() === "ecdsa");
-  if (ecdsaEntries.length === 0) {
-    return fail(`attestation report signing_algo is ${selected[0]?.algo || "unknown"}, not ecdsa`);
+  if (reportedAlgo !== "ed25519") {
+    const recovered = recoverPersonalSignAddress(signature, signedText);
+    const match = recovered ? ecdsaEntries.find((entry) => sameAddress(entry.address, recovered)) : undefined;
+    if (match) {
+      return {
+        verification: {
+          status: "verified",
+          reason: "Signature recovered to the attestation signing address and the response hash matches.",
+        },
+        signature,
+        signing_address: match.address,
+        intel_quote: match.intel_quote || intel,
+        nvidia_payload: match.nvidia_payload || nvidia,
+        matchedResponseSha256,
+        signingAlgo: "ecdsa",
+      };
+    }
   }
-  const recovered = recoverPersonalSignAddress(signature, signedText);
-  const match = recovered ? ecdsaEntries.find((entry) => sameAddress(entry.address, recovered)) : undefined;
-  if (!match) {
-    return fail("ECDSA signature did not recover to a signing_address in the attestation report");
+  const edEntries = selected.filter((entry) => {
+    const algo = entry.algo.toLowerCase();
+    return !algo || algo === "ed25519" || entry.address.toLowerCase().startsWith("ed25519:");
+  });
+  const edPool = edEntries.length > 0 ? edEntries : selected;
+  const edMatch = edPool.find((entry) => verifyEd25519(signature, signedText, entry.address));
+  if (edMatch) {
+    return {
+      verification: {
+        status: "verified",
+        reason: "Ed25519 signature matches the attestation signing key and the response hash matches.",
+      },
+      signature,
+      signing_address: edMatch.address,
+      intel_quote: edMatch.intel_quote || intel,
+      nvidia_payload: edMatch.nvidia_payload || nvidia,
+      matchedResponseSha256,
+      signingAlgo: "ed25519",
+    };
   }
-  return {
-    verification: {
-      status: "verified",
-      reason: "Signature recovered to the attestation signing address and the response hash matches.",
-    },
-    signature,
-    signing_address: match.address,
-    intel_quote: match.intel_quote || intel,
-    nvidia_payload: match.nvidia_payload || nvidia,
-    matchedResponseSha256,
-  };
+  if (reportedAlgo && reportedAlgo !== "ecdsa" && reportedAlgo !== "ed25519") {
+    return fail(`signature signing_algo is ${reportedAlgo}, and it did not verify`);
+  }
+  const reported = reportedAlgo || selected[0]?.algo || "unknown";
+  return fail(`signature did not verify against the attestation signing key (${reported})`);
 }
 
 function selectReportEntries(entries: ReportEntry[], kind: string): ReportEntry[] {
@@ -1252,6 +1313,60 @@ function walkReport(value: unknown, source: ReportEntry["source"], entries: Repo
 
 function firstQuote(entries: ReportEntry[], field: "intel_quote" | "nvidia_payload"): string {
   return entries.find((entry) => entry[field].length > 0)?.[field] ?? "";
+}
+
+function verifyEd25519(signature: string, message: string, address: string): boolean {
+  const sig = ed25519SignatureBytes(signature);
+  const key = ed25519KeyBytes(address);
+  if (!sig || !key) return false;
+  try {
+    return ed25519.verify(sig, new TextEncoder().encode(message), key);
+  } catch {
+    return false;
+  }
+}
+
+function ed25519SignatureBytes(signature: string): Uint8Array | null {
+  const trimmed = signature.trim().replace(/^ed25519:/i, "");
+  const hexBody = trimmed.replace(/^0x/i, "");
+  if (/^[0-9a-fA-F]+$/.test(hexBody) && hexBody.length % 2 === 0) {
+    const bytes = hexToBytes(hexBody);
+    if (bytes?.length === 64) return bytes;
+  }
+  const decoded = decodeBase58(trimmed);
+  return decoded?.length === 64 ? decoded : null;
+}
+
+function ed25519KeyBytes(address: string): Uint8Array | null {
+  const body = address.trim().replace(/^ed25519:/i, "");
+  const hexBody = body.replace(/^0x/i, "");
+  if (/^[0-9a-fA-F]{64}$/.test(hexBody)) return hexToBytes(hexBody);
+  const decoded = decodeBase58(body);
+  if (!decoded) return null;
+  if (decoded.length === 32) return decoded;
+  if (decoded.length === 33) return decoded.subarray(1);
+  return null;
+}
+
+function decodeBase58(value: string): Uint8Array | null {
+  const alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";
+  if (!value) return null;
+  let n = 0n;
+  for (const char of value) {
+    const index = alphabet.indexOf(char);
+    if (index < 0) return null;
+    n = n * 58n + BigInt(index);
+  }
+  let hex = n.toString(16);
+  if (hex.length % 2) hex = `0${hex}`;
+  const bytes: number[] = [];
+  for (let index = 0; index < hex.length; index += 2) bytes.push(Number.parseInt(hex.slice(index, index + 2), 16));
+  let zeros = 0;
+  for (const char of value) {
+    if (char !== "1") break;
+    zeros += 1;
+  }
+  return Uint8Array.from([...Array(zeros).fill(0), ...(bytes.length === 1 && bytes[0] === 0 ? [] : bytes)]);
 }
 
 function recoverPersonalSignAddress(signatureHex: string, text: string): string | null {

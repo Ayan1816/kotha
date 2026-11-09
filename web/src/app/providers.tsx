@@ -26,15 +26,24 @@ export function useKothaSession(): KothaSessionValue {
   return value;
 }
 
+function configuredNetwork(): KothaNetwork {
+  return process.env.NEXT_PUBLIC_NETWORK === "mainnet" ? "mainnet" : "testnet";
+}
+
+export function allowsMainnet(): boolean {
+  return process.env.NEXT_PUBLIC_NETWORK === "mainnet";
+}
+
 export function Providers({ children }: { children: ReactNode }) {
-  const [network, setNetworkState] = useState<KothaNetwork>("mainnet");
+  const [network, setNetworkState] = useState<KothaNetwork>(configuredNetwork());
   const [demoAccountId, setDemoAccountIdState] = useState<string | null>(null);
   const [sessionOwnerOptIn, setSessionOwnerOptInState] = useState(false);
 
   useEffect(() => {
     try {
       const stored = window.localStorage.getItem(NETWORK_KEY);
-      if (stored === "mainnet" || stored === "testnet") setNetworkState(stored);
+      if (!allowsMainnet()) setNetworkState("testnet");
+      else if (stored === "mainnet" || stored === "testnet") setNetworkState(stored);
       setDemoAccountIdState(window.sessionStorage.getItem(DEMO_FLAG) === "1" ? DEMO_OWNER_ID : null);
       setSessionOwnerOptInState(window.localStorage.getItem(OPT_IN) === "1");
     } catch {
@@ -43,9 +52,10 @@ export function Providers({ children }: { children: ReactNode }) {
   }, []);
 
   const setNetwork = useCallback((next: KothaNetwork) => {
-    setNetworkState(next);
+    const resolved = next === "mainnet" && !allowsMainnet() ? "testnet" : next;
+    setNetworkState(resolved);
     try {
-      window.localStorage.setItem(NETWORK_KEY, next);
+      window.localStorage.setItem(NETWORK_KEY, resolved);
     } catch {
       // The in-memory network still applies to this page.
     }

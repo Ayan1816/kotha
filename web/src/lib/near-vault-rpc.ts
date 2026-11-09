@@ -1,12 +1,19 @@
-import { createHash } from "crypto";
 import fs from "fs";
 import { aegisStatePath, readTextFile, writeJsonFile } from "./aegis-paths";
 
 export const DEFAULT_CONTRACT_ID = "kotha-vault-1793945609.testnet";
 export const DEFAULT_RPC_URL = "https://rpc.testnet.near.org";
 const LOG_FILE = "aegis-vault-executions.json";
-const DEMO_EPOCH_NS = 1_700_000_000_000_000_000n;
 const ACTION_TYPES = ["swap", "transfer", "withdraw", "shield", "unshield"] as const;
+const SAMPLE_PREFIX = "aegis-corr-";
+
+function vaultOwnerAccount(): string {
+  return process.env.NEXT_PUBLIC_OWNER_ID?.trim() || process.env.NEAR_ACCOUNT_ID?.trim() || process.env.OWNER_ID?.trim() || "owner.kotha.testnet";
+}
+
+function vaultAgentAccount(): string {
+  return process.env.NEAR_INTENTS_AGENT_ID?.trim() || process.env.NEXT_PUBLIC_CONTRACT_ID?.trim() || "agent-kotha-prime.near";
+}
 
 export type VerifiedExecution = {
   correlation_id: string;
@@ -59,8 +66,8 @@ export async function getVaultInfo(): Promise<VaultInfo> {
   const fallback: VaultInfo = {
     contractId: contractId(),
     rpcUrl: rpcUrl(),
-    owner: "owner.aegis.testnet",
-    agentAccount: "agent-aegis-prime.near",
+    owner: vaultOwnerAccount(),
+    agentAccount: vaultAgentAccount(),
     paused: false,
     totalExecutions: local.executions.length,
     source: "local",
@@ -99,7 +106,9 @@ export async function listExecutions(limit = 50): Promise<VerifiedExecution[]> {
   const local = readLog().executions;
   const chain = await tryChain<unknown[]>("list_executions", { from_index: 0, limit });
   const remote = Array.isArray(chain) ? chain.map(normalizeExecution).filter((row): row is VerifiedExecution => row != null) : [];
-  return mergeExecutions(remote, local).slice(0, limit);
+  return mergeExecutions(remote, local)
+    .filter((row) => !row.correlation_id.startsWith(SAMPLE_PREFIX))
+    .slice(0, limit);
 }
 
 export async function recordVerifiedExecution(record: VerifiedExecution): Promise<{
@@ -120,7 +129,7 @@ export function verificationCommands(record: VerifiedExecution): VerificationCom
   const recordArgs = shellSingleQuote(executionJson(record));
   const readArgs = shellSingleQuote(JSON.stringify({ correlation_id: record.correlation_id }));
   return {
-    record_execution: `near contract call-function as-transaction ${id} record_execution json-args ${recordArgs} prepaid-gas '100.0 Tgas' attached-deposit '0 NEAR' sign-as owner.aegis.testnet network-config testnet sign-with-keychain send`,
+    record_execution: `near contract call-function as-transaction ${id} record_execution json-args ${recordArgs} prepaid-gas '100.0 Tgas' attached-deposit '0 NEAR' sign-as ${vaultOwnerAccount()} network-config testnet sign-with-keychain send`,
     get_execution: `near contract call-function as-read-only ${id} get_execution json-args ${readArgs} network-config testnet now`,
   };
 }
@@ -193,65 +202,7 @@ function readLog(): LogFile {
 }
 
 function seedLog(): LogFile {
-  const swap = seedExecution({
-    correlation_id: "aegis-corr-swap-7f3c1a92b6e04d18",
-    action_type: "swap",
-    origin_asset: "nep141:wrap.near",
-    destination_asset: "nep141:usdt.tether-token.near",
-    amount_atomic: "1500000000000000000000000",
-    usd_amount_cents: "513",
-    chat_id: "chatcmpl-aegis-8c21aa01e4b64790",
-    request: { action: "swap", amount: "1.5", origin: "wNEAR", destination: "USDT" },
-    response: { policy_status: "PASS", explanation: "Swapped 1.5 wNEAR to USDT inside the daily budget." },
-    ageMs: 2 * 60 * 60 * 1000,
-  });
-  const shield = seedExecution({
-    correlation_id: "aegis-corr-shield-c04e88d15a2b47f0",
-    action_type: "shield",
-    origin_asset: "nep141:usdt.tether-token.near",
-    destination_asset: "nep141:usdt.tether-token.near",
-    amount_atomic: "25000000",
-    usd_amount_cents: "2500",
-    chat_id: "chatcmpl-aegis-19de4402ab1844c1",
-    request: { action: "shield", amount: "25", asset: "USDT", shard: "intents.far" },
-    response: { policy_status: "PASS", explanation: "Shielded 25 USDT into intents.far." },
-    ageMs: 26 * 60 * 1000,
-  });
-  return { version: 1, executions: [swap, shield] };
-}
-
-function seedExecution(input: {
-  correlation_id: string;
-  action_type: string;
-  origin_asset: string;
-  destination_asset: string;
-  amount_atomic: string;
-  usd_amount_cents: string;
-  chat_id: string;
-  request: unknown;
-  response: unknown;
-  ageMs: number;
-}): VerifiedExecution {
-  const requestBody = JSON.stringify(input.request);
-  const responseBody = JSON.stringify(input.response);
-  const request_sha256 = sha256(requestBody);
-  const response_sha256 = sha256(responseBody);
-  const timestamp_ns = (DEMO_EPOCH_NS - BigInt(input.ageMs) * BigInt(1_000_000)).toString();
-  return {
-    correlation_id: input.correlation_id,
-    agent_id: "agent-aegis-prime.near",
-    action_type: input.action_type,
-    origin_asset: input.origin_asset,
-    destination_asset: input.destination_asset,
-    amount_atomic: input.amount_atomic,
-    usd_amount_cents: input.usd_amount_cents,
-    near_ai_chat_id: input.chat_id,
-    tee_signing_address: `0x${sha256("kotha-demo-audit-v1").slice(0, 40)}`,
-    request_sha256,
-    response_sha256,
-    tee_signature: `0x${sha256(`${input.correlation_id}:${request_sha256}:${response_sha256}`)}`,
-    timestamp_ns,
-  };
+  return { version: 1, executions: [] };
 }
 
 function validateExecution(record: VerifiedExecution): VerifiedExecution {
@@ -354,8 +305,4 @@ function executionJson(record: VerifiedExecution): string {
 
 function shellSingleQuote(value: string): string {
   return `'${value.replace(/'/g, `'\\''`)}'`;
-}
-
-function sha256(value: string): string {
-  return createHash("sha256").update(value, "utf8").digest("hex");
 }

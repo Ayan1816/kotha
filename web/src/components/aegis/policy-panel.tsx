@@ -26,6 +26,7 @@ export function PolicyPanel({
   rotateBusy,
   revokeBusy,
   ownerLock = null,
+  grantNotice = null,
   onSave,
   onRotate,
   onRevoke,
@@ -39,6 +40,7 @@ export function PolicyPanel({
   rotateBusy: boolean;
   revokeBusy: boolean;
   ownerLock?: string | null;
+  grantNotice?: string | null;
   onSave: (patch: PolicyPatch) => Promise<void>;
   onRotate: () => void;
   onRevoke: () => void;
@@ -51,6 +53,8 @@ export function PolicyPanel({
   }, [policy, dirty]);
 
   const grantState = grant.revoked ? "revoked" : grant.active ? "active" : "expired";
+  const grantText = grantNotice || ownerLock || translate(lang, grantState);
+  const grantLive = !grantNotice && !ownerLock && grantState === "active";
 
   return (
     <div className="flex flex-col gap-3">
@@ -195,10 +199,10 @@ export function PolicyPanel({
             </code>
             <span
               className={`rounded-full px-2 py-0.5 text-[10px] uppercase tracking-wider ${
-                grantState === "active" ? "bg-[#00EC97]/15 text-[#00EC97]" : "bg-[#FF3B5C]/15 text-[#FF8A9A]"
+                grantLive ? "bg-[#00EC97]/15 text-[#00EC97]" : grantNotice || ownerLock ? "bg-[#FFB020]/15 text-[#FFB020]" : "bg-[#FF3B5C]/15 text-[#FF8A9A]"
               }`}
             >
-              {translate(lang, grantState)}
+              {grantText}
             </span>
           </div>
           <div className="space-y-1 text-[11px] text-white/55">

@@ -99,7 +99,7 @@ export type AttestedInference = {
   nonce: string;
   signature: string;
   signing_address: string;
-  signing_algo: "ecdsa";
+  signing_algo: "ecdsa" | "ed25519";
   intel_quote: string;
   nvidia_payload: string;
   redaction: RedactionResult | null;
@@ -123,7 +123,7 @@ export type EnclaveTelemetry = {
   provider: "NEAR AI Cloud";
   cpu_tee: "Intel TDX";
   gpu_tee: "NVIDIA H100 TEE";
-  signing_algo: "ecdsa";
+  signing_algo: "ecdsa" | "ed25519";
   base_url: string;
   key_configured: boolean;
   status: "live" | "unreachable" | "unconfigured";

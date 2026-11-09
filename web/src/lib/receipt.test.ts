@@ -25,7 +25,7 @@ after(() => {
 
 const body: ReceiptBody = {
   action: "swap",
-  agent_id: "agent-aegis-prime.near",
+  agent_id: "agent-kotha-prime.near",
   amount_atomic: "2000000000000000000000000",
   amount_usd: "1.00",
   chat_id: "chat-real-1",

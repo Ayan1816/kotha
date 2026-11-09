@@ -16,7 +16,7 @@ import { displayReply, type LoaderStep } from "@/lib/chat-stream";
 import { resolveRemittance } from "@/lib/phone-resolver";
 import {
   chainMatches,
-  connectedMayAct,
+  configuredOwnerId,
   createWalletProof,
   executionViewCall,
   parseFrozenReceiptJson,
@@ -65,7 +65,6 @@ export function CommandDeck() {
   const [revealedToken, setRevealedToken] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [ready, setReady] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [chatStep, setChatStep] = useState<LoaderStep | null>(null);
   const [liveText, setLiveText] = useState("");
@@ -78,7 +77,9 @@ export function CommandDeck() {
 
   const frozen = dashboard?.agentState.frozen ?? dashboard?.agentState.policy.frozen ?? false;
   const accountId = (near.signedAccountId || "").trim();
-  const ownerLock = accountId && !connectedMayAct(accountId) ? translate(lang, "connectOwner") : null;
+  const ownerConfigured = strictOwnerMode() && configuredOwnerId().length > 0;
+  const ownerLock = ownerConfigured && accountId !== configuredOwnerId() ? translate(lang, "connectOwner") : null;
+  const grantNotice = accountId ? null : translate(lang, "connectOwner");
   const thinking = busy === "chat";
 
   useEffect(() => {
@@ -120,9 +121,6 @@ export function CommandDeck() {
       .catch((error: unknown) => {
         if (!live) return;
         setLoadError(error instanceof Error ? error.message : translate("en", "loadFail"));
-      })
-      .finally(() => {
-        if (live) setReady(true);
       });
     return () => {
       live = false;
@@ -165,17 +163,13 @@ export function CommandDeck() {
     setMessages((current) => [...current, { id, role: "user", text }]);
     try {
       const result = await run("chat", async () => {
-        const started = Date.now();
-        const value = await postTeeChatStream(
+        return postTeeChatStream(
           { message: text, model, autoRedact, locale: lang },
           {
             onStep: (step) => setChatStep(step),
             onDelta: (next) => setLiveText(next),
           },
         );
-        const wait = Math.max(0, 1100 - (Date.now() - started));
-        if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
-        return value;
       });
       const intent = result.attestation.decision.intent;
       const preview = result.dryRun;
@@ -231,8 +225,11 @@ export function CommandDeck() {
 
   async function ownerProof(action: string, payload: Record<string, unknown>) {
     const account = (near.signedAccountId || "").trim();
-    if (!account) return null;
-    if (!connectedMayAct(account)) throw new Error(translate(lang, "connectOwner"));
+    if (!account) {
+      if (ownerConfigured) throw new Error(translate(lang, "connectOwner"));
+      return null;
+    }
+    if (ownerConfigured && account !== configuredOwnerId()) throw new Error(translate(lang, "connectOwner"));
     const sessionOwner = proofUsesSessionOwner(account, { sessionOwnerOptIn: !strictOwnerMode() });
     return createWalletProof((params) => near.signNEP413Message(params), action, payload, Date.now(), sessionOwner);
   }
@@ -317,7 +314,7 @@ export function CommandDeck() {
     if (!quote) return;
     try {
       const account = (near.signedAccountId || "").trim();
-      if (account && !connectedMayAct(account)) {
+      if (ownerConfigured && account !== configuredOwnerId()) {
         setNotice(translate(lang, "connectOwner"));
         return;
       }
@@ -431,20 +428,15 @@ export function CommandDeck() {
             </button>
           </div>
         ) : null}
-        {!ready ? <p className="mb-4 text-sm text-[#00EC97]">{translate(lang, "opening")}</p> : null}
         {loadError ? (
           <div className="mb-4 max-w-md space-y-3">
             <p className="text-sm text-[#ffb3c0]">{loadError}</p>
             <ShimmerActionButton
               onClick={() => {
-                setReady(false);
                 setLoadError(null);
-                void openDeck()
-                  .then(() => setReady(true))
-                  .catch((error: unknown) => {
-                    setLoadError(error instanceof Error ? error.message : translate(lang, "loadFail"));
-                    setReady(true);
-                  });
+                void openDeck().catch((error: unknown) => {
+                  setLoadError(error instanceof Error ? error.message : translate(lang, "loadFail"));
+                });
               }}
             >
               {translate(lang, "retry")}
@@ -531,6 +523,7 @@ export function CommandDeck() {
               rotateBusy={busy === "rotate"}
               revokeBusy={busy === "revoke"}
               ownerLock={ownerLock}
+              grantNotice={grantNotice}
               onSave={savePolicy}
               onRotate={() => void rotate()}
               onRevoke={() => void revoke()}

@@ -141,13 +141,13 @@ export function QuoteBody({ lang, intent, dryRun, remittanceLine }: { lang: Lang
         <Info label={translate(lang, "amount")} value={`${intent.amount} ${origin.symbol}`} />
         <Info label={translate(lang, "expected")} value={`${dryRun.quote.expectedAmountOut} ${destination.symbol}`} />
         <Info label={translate(lang, "fee")} value="" ticker={dryRun.quote.feeUsd} />
-        <Info label={translate(lang, "targetShard")} value={dryRun.quote.shard} />
+        <Info label={translate(lang, "targetShard")} value={testnetLabel(dryRun.quote.shard)} />
         <Info label={translate(lang, "rate")} value={dryRun.quote.rate} />
         <Info label={translate(lang, "slippage")} value={`${dryRun.quote.slippageBps} bps`} />
         <Info label={translate(lang, "recipient")} value={intent.recipient || "—"} wide />
       </dl>
       {remittanceLine ? <p className="break-words font-mono text-[11px] leading-relaxed text-[#d9ffe8]">{remittanceLine}</p> : null}
-      <p className="break-words font-mono text-[11px] text-white/55">{dryRun.quote.route}</p>
+      <p className="break-words font-mono text-[11px] text-white/55">{testnetLabel(dryRun.quote.route)}</p>
       <div>
         <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-[0.14em] text-white/45">
           <span>{translate(lang, "budgetImpact")}</span>
@@ -175,6 +175,11 @@ export function QuoteBody({ lang, intent, dryRun, remittanceLine }: { lang: Lang
       </div>
     </div>
   );
+}
+
+function testnetLabel(value: string): string {
+  if (process.env.NEXT_PUBLIC_NETWORK === "mainnet") return value;
+  return value.replace(/\b(?:outlayer\.near|intents\.near|intents\.far)\b/g, "demo (testnet)");
 }
 
 function Info({ label, value, ticker, wide }: { label: string; value: string; ticker?: number; wide?: boolean }) {

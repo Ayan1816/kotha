@@ -113,7 +113,7 @@ const en = {
   explorer: "Testnet transaction",
   receiptHash: "receipt_hash",
   proof: "SHA-256 & TEE Signature Proof",
-  empty: "No executions match this filter.",
+  empty: "No proofs yet",
   copied: "Copied",
   copy: "Copy",
   you: "You",
@@ -190,7 +190,7 @@ const en = {
   chainMatch: "Matches chain",
   chainMismatch: "Mismatch",
   stepRedact: "Redacting",
-  stepThink: "TEE thinking",
+  stepThink: "Thinking in TEE",
   stepVerify: "Verifying",
   stepPolicy: "Policy check",
   readOnly: "Read-only until the owner wallet connects",
@@ -283,6 +283,12 @@ const en = {
   welcomeBody: "Pick a prompt or use the microphone. Kotha answers in plain language.",
   serverSigned: "Server signer submitted the execution.",
   micLanguage: "Microphone language",
+  micDenied: "Microphone permission was denied.",
+  micNone: "No microphone was found.",
+  micUnsupported: "This browser cannot record audio.",
+  micTimeout: "Transcription timed out after 30s.",
+  remainingLimit: "Remaining limit",
+  projectedSpend: "Projected spend",
 } as const;
 
 export type CopyKey = keyof typeof en;
@@ -397,7 +403,7 @@ const bn: { [K in CopyKey]: string } = {
   explorer: "টেস্টনেট লেনদেন",
   receiptHash: "রসিদ হ্যাশ",
   proof: "SHA-256 ও টিইই স্বাক্ষর প্রুফ",
-  empty: "এই ফিল্টারে কোনো এক্সিকিউশন নেই।",
+  empty: "এখনো কোনো প্রমাণ নেই।",
   copied: "কপি হয়েছে",
   copy: "কপি",
   you: "আপনি",
@@ -567,6 +573,12 @@ const bn: { [K in CopyKey]: string } = {
   welcomeBody: "একটি প্রম্পট বেছে নিন বা মাইক্রোফোন ব্যবহার করুন। কথা সহজ ভাষায় উত্তর দেয়।",
   serverSigned: "সার্ভার সিগনার এক্সিকিউশন জমা দিয়েছে।",
   micLanguage: "মাইক্রোফোনের ভাষা",
+  micDenied: "মাইক্রোফোনের অনুমতি দেওয়া হয়নি।",
+  micNone: "কোনো মাইক্রোফোন পাওয়া যায়নি।",
+  micUnsupported: "এই ব্রাউজার অডিও রেকর্ড করতে পারে না।",
+  micTimeout: "৩০ সেকেন্ডে লেখা ওঠেনি।",
+  remainingLimit: "বাকি সীমা",
+  projectedSpend: "প্রক্ষেপিত খরচ",
 };
 
 export function translate(lang: Lang, key: CopyKey): string {

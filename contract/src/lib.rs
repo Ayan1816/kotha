@@ -246,7 +246,7 @@ mod tests {
     ) -> VerifiedExecution {
         VerifiedExecution {
             correlation_id: correlation_id.to_string(),
-            agent_id: "agent-aegis-prime.near".to_string(),
+            agent_id: "agent-kotha-prime.near".to_string(),
             action_type: action_type.to_string(),
             origin_asset: "nep141:wrap.near".to_string(),
             destination_asset: "nep141:usdt.tether-token.near".to_string(),

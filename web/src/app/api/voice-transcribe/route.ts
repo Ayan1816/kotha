@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
-import { chooseTranscript, normalizeVoiceLanguage, parseTranscription, WHISPER_MODEL, WHISPER_URL } from "@/lib/voice-transcribe";
+import { normalizeVoiceLanguage, parseTranscription, WHISPER_MODEL, WHISPER_URL } from "@/lib/voice-transcribe";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const TIMEOUT_MS = 60_000;
+const TIMEOUT_MS = 30_000;
 const MAX_AUDIO_BYTES = 12 * 1024 * 1024;
 
 export async function POST(request: Request) {
@@ -12,26 +12,21 @@ export async function POST(request: Request) {
   let form: FormData;
   try {
     form = await request.formData();
-  } catch {
-    return NextResponse.json({ error: { code: "invalid_audio", message: "Expected multipart audio." } }, { status: 400 });
+  } catch (error) {
+    console.error("voice-transcribe", error);
+    return NextResponse.json({ text: "", error: "Expected multipart audio." }, { status: 400 });
   }
-  const audio = form.get("audio");
+  const audio = form.get("file") ?? form.get("audio");
   if (!(audio instanceof Blob) || audio.size === 0) {
-    return NextResponse.json({ error: { code: "audio_required", message: "audio file is required." } }, { status: 400 });
+    return NextResponse.json({ text: "", error: "audio file is required." }, { status: 400 });
   }
   if (audio.size > MAX_AUDIO_BYTES) {
-    return NextResponse.json({ error: { code: "audio_too_large", message: "audio exceeds 12 MB." } }, { status: 413 });
+    return NextResponse.json({ text: "", error: "audio exceeds 12 MB." }, { status: 413 });
   }
   const language = normalizeVoiceLanguage(form.get("language"));
-  const hintValue = form.get("hint");
-  const hint = typeof hintValue === "string" ? hintValue.trim() : "";
   if (!key) {
-    const choice = chooseTranscript(null, "", hint);
-    return NextResponse.json({
-      text: choice.text,
-      fallback: true,
-      message: choice.message || "NEAR_AI_CLOUD_API_KEY is not set.",
-    });
+    console.error("voice-transcribe", "NEAR_AI_CLOUD_API_KEY is not set.");
+    return NextResponse.json({ text: "", error: "NEAR_AI_CLOUD_API_KEY is not set." }, { status: 503 });
   }
   const outbound = new FormData();
   const filename = audio instanceof File && audio.name ? audio.name : "speech.webm";
@@ -48,12 +43,23 @@ export async function POST(request: Request) {
     const json = await response.json().catch(() => null);
     const cloudText = response.ok ? parseTranscription(json) : "";
     if (!response.ok || !cloudText) {
-      const choice = chooseTranscript(response.status, cloudText, hint);
-      return NextResponse.json({ text: choice.text, fallback: true, message: choice.message });
+      const message = cloudText ? "" : readError(json) || `Transcription failed (HTTP ${response.status}).`;
+      console.error("voice-transcribe", message || json);
+      return NextResponse.json({ text: "", error: message || "Transcription failed." }, { status: 502 });
     }
-    return NextResponse.json({ text: cloudText, fallback: false, message: "" });
-  } catch {
-    const choice = chooseTranscript(null, "", hint);
-    return NextResponse.json({ text: choice.text, fallback: true, message: choice.message || "Transcription timed out." });
+    return NextResponse.json({ text: cloudText });
+  } catch (error) {
+    const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.name === "AbortError");
+    const message = timedOut ? "Transcription timed out after 30s." : error instanceof Error ? error.message : "Transcription failed.";
+    console.error("voice-transcribe", error);
+    return NextResponse.json({ text: "", error: message }, { status: 504 });
   }
+}
+
+function readError(body: unknown): string {
+  if (!body || typeof body !== "object") return "";
+  const record = body as { error?: { message?: unknown }; message?: unknown };
+  if (typeof record.message === "string" && record.message.trim()) return record.message.trim();
+  if (record.error && typeof record.error.message === "string") return record.error.message.trim();
+  return "";
 }

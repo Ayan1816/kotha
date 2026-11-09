@@ -14,7 +14,7 @@ import {
 import { getVaultInfo, listExecutions, recordVerifiedExecution, type VerifiedExecution } from "@/lib/near-vault-rpc";
 import { anchorExecutionReceipt, overlayReceiptRows, saveReceiptTxHash } from "@/lib/receipt-service";
 import type { AegisIntent } from "@/lib/dashboard-types";
-import { DEFAULT_CONTRACT_ID, DEMO_OWNER_ID, isPlausibleTxHash, requiresOwnerProof, walletProofAttached } from "@/lib/wallet-proof";
+import { configuredOwnerId, DEFAULT_CONTRACT_ID, DEMO_OWNER_ID, isPlausibleTxHash, publicNetwork, requiresOwnerProof, strictOwnerMode, walletProofAttached } from "@/lib/wallet-proof";
 import { requireOwnerProof, WalletAuthError } from "@/lib/wallet-verify";
 
 export const runtime = "nodejs";
@@ -32,7 +32,7 @@ export async function GET() {
       listExecutions(),
     ]);
     return NextResponse.json({
-      network: catalog.network,
+      network: labelNetwork(catalog.network),
       tokens: catalog.tokens,
       agentState,
       vaultInfo,
@@ -63,7 +63,8 @@ export async function POST(request: Request) {
   }
   const payload = asRecord(record.payload) ?? {};
   const walletAttached = walletProofAttached(record.wallet);
-  if (requiresOwnerProof(type) && walletAttached) {
+  const enforceOwner = requiresOwnerProof(type) && (walletAttached || (strictOwnerMode() && configuredOwnerId().length > 0));
+  if (enforceOwner) {
     try {
       await requireOwnerProof({ proof: record.wallet, action: type, payload });
     } catch (error) {
@@ -179,6 +180,16 @@ function errorResponse(error: unknown) {
   }
   const message = error instanceof Error ? error.message : "Unexpected error.";
   return NextResponse.json({ error: { code: "internal_error", message } }, { status: 500 });
+}
+
+function labelNetwork<T extends { network: string; contract_id: string; confidential_contract_id: string }>(network: T): T {
+  if (publicNetwork() === "mainnet") return network;
+  return {
+    ...network,
+    network: "demo (testnet)",
+    contract_id: "demo (testnet)",
+    confidential_contract_id: "demo (testnet)",
+  };
 }
 
 function serverSignerAccount(): string {

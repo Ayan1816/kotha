@@ -38,6 +38,9 @@ test("reads a normal JSON completion unchanged", () => {
   assert.equal(partialExplanation('{"reply":"Live line","action":"none"}'), "Live line");
   assert.equal(displayReply('{"reply":"Swap ready","action":"none","amount":0}'), "Swap ready");
   assert.equal(displayReply("Plain answer"), "Plain answer");
+  assert.equal(displayReply('```json\n{"reply":"Swap ready","action":"swap"}\n```'), "Swap ready");
+  assert.equal(displayReply('{"message":"Hello there"}'), "Hello there");
+  assert.equal(displayReply('Note {"reply":"Only this"} extra'), "Only this");
   assert.deepEqual(readActionCard('{"reply":"Go","action":"swap","amount":2}'), { action: "swap", amount: 2 });
   assert.equal(readActionCard('{"reply":"Hi","action":"none","amount":0}'), null);
   const req = "a".repeat(64);
@@ -52,7 +55,7 @@ test("keeps the four loader steps and the Testnet Demo badge", () => {
   const english = [translate("en", "stepRedact"), translate("en", "stepThink"), translate("en", "stepVerify"), translate("en", "stepPolicy")].join(
     " → ",
   );
-  assert.equal(english, "Redacting → TEE thinking → Verifying → Policy check");
+  assert.equal(english, "Redacting → Thinking in TEE → Verifying → Policy check");
   assert.equal(translate("bn", "stepRedact"), "রিড্যাক্ট করা হচ্ছে");
   assert.equal(translate("bn", "stepThink"), "টিইই ভাবছে");
   assert.equal(translate("bn", "stepVerify"), "যাচাই হচ্ছে");

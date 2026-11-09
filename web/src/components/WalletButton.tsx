@@ -8,6 +8,52 @@ import { useEffect, useRef, useState } from "react";
 
 const BOX = "h-9 px-3 text-sm";
 
+function armWalletDismiss(): () => void {
+  let stopped = false;
+  const rejectOpen = () => {
+    document.querySelectorAll(".hot-connector-popup .modal-container").forEach((node) => {
+      if (node instanceof HTMLElement) node.click();
+    });
+  };
+  const paint = () => {
+    document.querySelectorAll(".hot-connector-popup").forEach((root) => {
+      if (!(root instanceof HTMLElement) || root.querySelector("[data-kotha-cancel]")) return;
+      const header = root.querySelector(".modal-header") || root.querySelector(".modal-content");
+      if (!header) return;
+      const button = document.createElement("button");
+      button.type = "button";
+      button.dataset.kothaCancel = "1";
+      button.textContent = "✕ Cancel";
+      button.setAttribute("aria-label", "Cancel");
+      button.style.cssText =
+        "margin-left:auto;background:#141414;color:#fff;border:1px solid rgba(255,255,255,.35);border-radius:999px;padding:6px 12px;cursor:pointer;font:600 13px/1 sans-serif;";
+      button.addEventListener("click", (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        rejectOpen();
+      });
+      header.appendChild(button);
+    });
+  };
+  const onKey = (event: KeyboardEvent) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    rejectOpen();
+  };
+  document.addEventListener("keydown", onKey);
+  const observer = new MutationObserver(paint);
+  observer.observe(document.body, { childList: true, subtree: true });
+  const timer = window.setInterval(paint, 200);
+  paint();
+  return () => {
+    if (stopped) return;
+    stopped = true;
+    document.removeEventListener("keydown", onKey);
+    observer.disconnect();
+    window.clearInterval(timer);
+  };
+}
+
 function shortAccount(id: string): string {
   if (id.length <= 16) return id;
   return `${id.slice(0, 6)}…${id.slice(-4)}`;
@@ -63,9 +109,14 @@ export function WalletButton({ lang }: { lang: Lang }) {
         title={error || undefined}
         onClick={() => {
           setError(null);
-          void signIn().catch((connectError: unknown) => {
-            setError(connectError instanceof Error ? connectError.message : translate(lang, "walletConnectFailed"));
-          });
+          const stop = armWalletDismiss();
+          void signIn()
+            .catch((connectError: unknown) => {
+              const message = connectError instanceof Error ? connectError.message : "";
+              if (/reject|cancel|closed/i.test(message)) return;
+              setError(message || translate(lang, "walletConnectFailed"));
+            })
+            .finally(stop);
         }}
         className={`${BOX} whitespace-nowrap rounded-full bg-[#00EC97] font-semibold text-[#04140d]`}
       >
@@ -94,7 +145,7 @@ export function WalletButton({ lang }: { lang: Lang }) {
       {open ? (
         <div
           role="menu"
-          className="absolute right-0 z-50 mt-2 w-80 max-w-[calc(100vw-3rem)] space-y-3 rounded-2xl border border-white/10 bg-[#07110d] p-4 text-sm text-white shadow-[0_16px_40px_rgba(0,0,0,0.45)]"
+          className="absolute right-0 z-[80] mt-2 w-80 max-w-[calc(100vw-3rem)] space-y-3 rounded-2xl border border-white/10 bg-[#07110d] p-4 text-sm text-white shadow-[0_16px_40px_rgba(0,0,0,0.45)]"
         >
           <div className="flex items-start justify-between gap-2">
             <p className="min-w-0 flex-1 break-all text-sm text-white">{signedAccountId}</p>
