@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
-import { limitAiRequest, MAX_REPLY_TOKENS } from "@/lib/ai-rate-limit";
-import { isTeeModel, nearAiApiKey, nearAiBaseUrl } from "@/lib/near-ai-tee";
+import { limitAiRequest } from "@/lib/ai-rate-limit";
+import { activeChatModel, nearAiApiKey, nearAiBaseUrl } from "@/lib/near-ai-tee";
+import { translateText } from "@/lib/translate-text";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,51 +32,19 @@ export async function POST(request: Request) {
   if (!apiKey) {
     return NextResponse.json({ error: { code: "unconfigured", message: "NEAR_AI_CLOUD_API_KEY is not set." } }, { status: 503 });
   }
-  const language = target === "bn" ? "Bengali" : "English";
-  const requested = process.env.NEAR_AI_MODEL?.trim() || "";
-  const model = requested && isTeeModel(requested) ? requested : "deepseek/deepseek-v3.2";
   try {
-    const response = await fetch(`${nearAiBaseUrl()}/chat/completions`, {
-      method: "POST",
-      headers: {
-        authorization: `Bearer ${apiKey}`,
-        accept: "application/json",
-        "content-type": "application/json",
-      },
-      body: JSON.stringify({
-        model,
-        stream: false,
-        max_tokens: MAX_REPLY_TOKENS,
-        messages: [
-          {
-            role: "system",
-            content: `Translate to ${language}. Keep numbers, NEAR account IDs, token symbols and code unchanged. Output only the translation.`,
-          },
-          { role: "user", content: text },
-        ],
-      }),
-      signal: AbortSignal.timeout(30_000),
+    const translated = await translateText({
+      text,
+      target,
+      apiKey,
+      model: activeChatModel(),
+      baseUrl: nearAiBaseUrl(),
     });
-    const payload = (await response.json().catch(() => null)) as unknown;
-    if (!response.ok) {
-      return NextResponse.json({ error: { code: "translate_failed", message: "Translation failed." } }, { status: 502 });
-    }
-    const translated = assistantText(payload);
-    if (!translated) {
-      return NextResponse.json({ error: { code: "translate_failed", message: "Translation failed." } }, { status: 502 });
-    }
     return NextResponse.json({ text: translated });
-  } catch {
-    return NextResponse.json({ error: { code: "translate_failed", message: "Translation failed." } }, { status: 502 });
+  } catch (error) {
+    const message = error instanceof Error && error.message ? error.message : "Translation failed.";
+    return NextResponse.json({ error: { code: "translate_failed", message } }, { status: 502 });
   }
-}
-
-function assistantText(payload: unknown): string {
-  const record = asRecord(payload);
-  const choice = Array.isArray(record.choices) ? asRecord(record.choices[0]) : null;
-  const message = asRecord(choice?.message);
-  const content = typeof message?.content === "string" ? message.content.trim() : "";
-  return content.replace(/^```(?:\w+)?\s*/i, "").replace(/\s*```$/, "").trim();
 }
 
 function callerKey(request: Request): string | null {

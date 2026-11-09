@@ -8,19 +8,27 @@ import { recordedBlobToWav, voiceExceedsLimit } from "@/lib/wav";
 import { cn } from "@/lib/utils";
 import { EnclaveSwitch, SignatureTamperLab, SpotlightGlassCard, VoiceWaveform } from "@/components/ui/aegis-primitives";
 import type { AttestedInference, ChatModelId, DryRunPreview, PolicyStatus } from "@/lib/dashboard-types";
+import { TESTNET_FAUCET_URL } from "@/lib/wallet-proof";
 import { Mic, MicOff, Send, Shield } from "lucide-react";
 import { useEffect, useRef, useState, type ReactNode } from "react";
 
 const CHIPS = ["chipSwap", "chipRemit", "chipShield", "chipSecurity"] as const;
+export type ChipKey = (typeof CHIPS)[number];
 const RECORD_LIMIT_MS = 30_000;
+
+export function isChipKey(value: unknown): value is ChipKey {
+  return typeof value === "string" && (CHIPS as readonly string[]).includes(value);
+}
 
 export type ChatMessage = {
   id: string;
   role: "user" | "assistant";
   lang: Lang;
   text: string;
+  chipKey?: string;
   translations?: { bn?: string; en?: string };
   translating?: boolean;
+  translationFailed?: boolean;
   statusCode?: string;
   errorCode?: string;
   attestation?: AttestedInference;
@@ -44,6 +52,8 @@ export function CopilotPanel({
   nearBalance = null,
   onAutoRedact,
   onSend,
+  onRetry,
+  onRetryTranslate,
   onDryRun,
   onExecute,
 }: {
@@ -62,7 +72,9 @@ export function CopilotPanel({
   walletConnected?: boolean;
   nearBalance?: string | null;
   onAutoRedact: (next: boolean) => void;
-  onSend: (text: string) => void;
+  onSend: (text: string, chipKey?: string) => void;
+  onRetry?: (id: string) => void;
+  onRetryTranslate?: (id: string) => void;
   onDryRun?: () => void;
   onExecute?: () => void;
 }) {
@@ -109,11 +121,11 @@ export function CopilotPanel({
     };
   }, []);
 
-  function submit(text: string) {
+  function submit(text: string, chipKey?: string) {
     const message = text.trim();
     if (!message || thinkingRef.current) return;
     setInput("");
-    onSendRef.current(message);
+    onSendRef.current(message, chipKey);
   }
 
   function clearRecordTimers() {
@@ -326,7 +338,7 @@ export function CopilotPanel({
       setDemoWave(false);
       demoTimer.current = null;
     }, 10_000);
-    submit(translate(lang, "chipSwap"));
+    submit(translate(lang, "chipSwap"), "chipSwap");
   }
 
   const teeLabel =
@@ -383,7 +395,12 @@ export function CopilotPanel({
             message.role === "user" ? (
               <div key={message.id} className="ml-8 rounded-2xl rounded-br-md border border-[#00D2FF]/25 bg-[#00D2FF]/8 px-3 py-2 text-sm text-white">
                 <div className="mb-1 text-[10px] uppercase tracking-[0.16em] text-[#00D2FF]">{translate(lang, "you")}</div>
-                {message.text}
+                {userBubbleText(message, lang)}
+                {!thinking && message.id === messages[messages.length - 1]?.id ? (
+                  <button type="button" onClick={() => onRetry?.(message.id)} className="mt-2 block text-xs text-[#7DD3FC] underline-offset-2 hover:underline">
+                    {translate(lang, "retry")}
+                  </button>
+                ) : null}
               </div>
             ) : (
               <AssistantBubble
@@ -394,6 +411,7 @@ export function CopilotPanel({
                 ownerReady={ownerReady}
                 onDryRun={onDryRun}
                 onExecute={onExecute}
+                onRetryTranslate={onRetryTranslate}
               />
             ),
           )}
@@ -423,7 +441,7 @@ export function CopilotPanel({
                 key={key}
                 type="button"
                 disabled={thinking}
-                onClick={() => submit(translate(lang, key))}
+                onClick={() => submit(translate(lang, key), key)}
                 className="shrink-0 whitespace-nowrap rounded-full border border-white/10 bg-black/25 px-3 py-2 text-sm text-white hover:border-[#00EC97]/40 disabled:opacity-50"
               >
                 {translate(lang, key)}
@@ -505,6 +523,7 @@ function AssistantBubble({
   ownerReady,
   onDryRun,
   onExecute,
+  onRetryTranslate,
 }: {
   lang: Lang;
   message: ChatMessage;
@@ -512,15 +531,18 @@ function AssistantBubble({
   ownerReady: boolean;
   onDryRun?: () => void;
   onExecute?: () => void;
+  onRetryTranslate?: (id: string) => void;
 }) {
   const body = visibleText(message, lang);
   const pendingTranslation = needsTranslation(message, lang);
+  const retry = <TranslationRetry lang={lang} message={message} onRetry={onRetryTranslate} />;
   const attestation = message.attestation;
   if (!attestation) {
     return (
       <div className="mr-8 rounded-2xl border border-[#FF8A00]/30 bg-[#FF8A00]/8 px-3 py-2 text-sm text-white">
         {displayReply(body)}
         {pendingTranslation ? <p className="mt-1 text-xs text-white/50">{translate(lang, "translating")}</p> : null}
+        {retry}
       </div>
     );
   }
@@ -569,6 +591,14 @@ function AssistantBubble({
       </div>
       <p className="text-sm leading-relaxed text-white/90">{displayReply(body)}</p>
       {pendingTranslation ? <p className="mt-1 text-xs text-white/50">{translate(lang, "translating")}</p> : null}
+      {retry}
+      {showFaucet(message) ? (
+        <p className="mt-2 text-sm">
+          <a href={TESTNET_FAUCET_URL} target="_blank" rel="noreferrer" className="text-[#7DD3FC] underline-offset-2 hover:underline">
+            {translate(lang, "faucetLink")}
+          </a>
+        </p>
+      ) : null}
       <ActionCard
         lang={lang}
         intentAmount={decision.intent?.amount}
@@ -639,7 +669,15 @@ function ActionCard({
   const fromText = readActionCard(fallbackText);
   if (!fromIntent && !fromText) return null;
   const enabled = ownerReady && status === "PASS";
-  const tip = !ownerReady ? translate(lang, "connectOwner") : status !== "PASS" ? translate(lang, "blockedByPolicy") : undefined;
+  const tip = !ownerReady
+    ? translate(lang, "connectOwner")
+    : status === "NEEDS_WALLET"
+      ? translate(lang, "needsWallet")
+      : status === "INSUFFICIENT_BALANCE"
+        ? translate(lang, "insufficientBadge")
+        : status !== "PASS"
+          ? translate(lang, "blockedByPolicy")
+          : undefined;
   return (
     <div className="mt-3 rounded-2xl border border-white/10 bg-black/30 p-3">
       <div className="flex flex-wrap gap-2">
@@ -702,11 +740,15 @@ function Badge({ children, className, title }: { children: ReactNode; className:
 function policyKey(status: string): CopyKey {
   if (status === "WARNING") return "warning";
   if (status === "BLOCKED") return "blocked";
+  if (status === "NEEDS_WALLET") return "needsWalletBadge";
+  if (status === "INSUFFICIENT_BALANCE") return "insufficientBadge";
   if (status === "QUESTION") return "pass";
   return "pass";
 }
 
 function policyTip(lang: Lang, status: PolicyStatus, reason: string): string {
+  if (reason === "NEEDS_WALLET" || status === "NEEDS_WALLET") return translate(lang, "needsWallet");
+  if (reason === "INSUFFICIENT_BALANCE" || status === "INSUFFICIENT_BALANCE") return translate(lang, "insufficientBadge");
   if (reason === "BALANCE_UNAVAILABLE") return translate(lang, "balanceUnavailable");
   if (reason === "INVALID_RECIPIENT_FORMAT") return translate(lang, "invalidRecipient");
   if (reason === "QUESTION" || status === "PASS") return translate(lang, "pass");
@@ -719,8 +761,30 @@ function visibleText(message: ChatMessage, lang: Lang): string {
   if (message.errorCode === "wallet_limit") return translate(lang, "walletLimit");
   if (message.errorCode === "voice_too_long") return translate(lang, "voiceTooLong");
   if (message.errorCode === "load_fail") return translate(lang, "loadFail");
+  if (message.errorCode === "request_timeout") return translate(lang, "requestTimeout");
   if ((lang === "bn" || lang === "en") && message.translations?.[lang]) return message.translations[lang] || message.text;
   return message.text;
+}
+
+function userBubbleText(message: ChatMessage, lang: Lang): string {
+  if (isChipKey(message.chipKey)) return translate(lang, message.chipKey);
+  return message.text;
+}
+
+function showFaucet(message: ChatMessage): boolean {
+  if (process.env.NEXT_PUBLIC_NETWORK === "mainnet") return false;
+  return message.statusCode === "INSUFFICIENT_BALANCE" || message.attestation?.decision.policy_status === "INSUFFICIENT_BALANCE";
+}
+
+function TranslationRetry({ lang, message, onRetry }: { lang: Lang; message: ChatMessage; onRetry?: (id: string) => void }) {
+  if (!message.translationFailed || message.role !== "assistant") return null;
+  if (lang !== "bn" && lang !== "en") return null;
+  if (message.lang === lang || message.translations?.[lang]) return null;
+  return (
+    <button type="button" onClick={() => onRetry?.(message.id)} className="mt-1 block text-xs text-[#7DD3FC] underline-offset-2 hover:underline">
+      {translate(lang, "translateFailed")}
+    </button>
+  );
 }
 
 function needsTranslation(message: ChatMessage, lang: Lang): boolean {
@@ -732,7 +796,9 @@ function needsTranslation(message: ChatMessage, lang: Lang): boolean {
 
 function policyTone(status: PolicyStatus): string {
   if (status === "BLOCKED") return "border-[#FF3B5C]/50 bg-[#FF3B5C]/15 text-[#ffb3c0]";
-  if (status === "WARNING") return "border-[#FF8A00]/50 bg-[#FF8A00]/15 text-[#ffd7a1]";
+  if (status === "WARNING" || status === "NEEDS_WALLET" || status === "INSUFFICIENT_BALANCE") {
+    return "border-[#FF8A00]/50 bg-[#FF8A00]/15 text-[#ffd7a1]";
+  }
   return "border-[#00EC97]/40 bg-[#00EC97]/12 text-[#b8ffe0]";
 }
 

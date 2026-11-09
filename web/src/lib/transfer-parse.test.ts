@@ -177,9 +177,76 @@ test("an unknown balance does not invent available 0", () => {
   assert.ok(guarded);
   assert.equal(guarded.intent.recipient, "alice.testnet");
   assert.equal(guarded.intent.confidential, false);
-  assert.equal(guarded.policy_reason, "BALANCE_UNAVAILABLE");
+  assert.equal(guarded.policy_status, "NEEDS_WALLET");
+  assert.equal(guarded.policy_reason, "NEEDS_WALLET");
+  assert.equal(guarded.explanation, "Preview ready. Connect your wallet to check balance and execute.");
   assert.equal(/available 0/i.test(guarded.explanation), false);
-  assert.match(guarded.explanation, /unavailable/i);
+  assert.equal(/is blocked/i.test(guarded.explanation), false);
+  assert.ok(guarded.risk_score < 90);
+});
+
+test("valid NEAR transfers need a wallet when none is connected and pass when one is", () => {
+  const phrases: Array<[string, string, string, "en" | "bn", string]> = [
+    ["Send 0.01 NEAR to alice.testnet", "alice.testnet", "0.01", "en", "Preview ready. Connect your wallet to check balance and execute."],
+    ["alice.testnet কে 0.01 NEAR পাঠাও", "alice.testnet", "0.01", "bn", "প্রিভিউ তৈরি। ব্যালান্স দেখতে ও সম্পাদন করতে ওয়ালেট যুক্ত করুন।"],
+    ["send 1 NEAR to bob.near", "bob.near", "1", "en", "Preview ready. Connect your wallet to check balance and execute."],
+  ];
+  const empty = { public: {}, confidential: {}, prices: {} };
+  for (const [message, recipient, amount, locale, sentence] of phrases) {
+    const skipped = guardTransferCommand(message, { action: "transfer", recipient: "INVALID_RECIPIENT_FORMAT", amount: "0.01redacted_pii_1" }, policy, empty, locale);
+    assert.ok(skipped, message);
+    assert.equal(skipped.intent.recipient, recipient, message);
+    assert.equal(skipped.intent.amount, amount, message);
+    assert.equal(skipped.policy_status, "NEEDS_WALLET", message);
+    assert.notEqual(skipped.policy_status, "BLOCKED", message);
+    assert.ok(skipped.risk_score < 90, message);
+    assert.equal(skipped.preview.policyAllowed, true, message);
+    assert.equal(skipped.preview.allowed, false, message);
+    assert.equal(skipped.preview.balance, "skipped", message);
+    assert.equal(skipped.preview.checks?.find((check) => check.code === "perTx")?.result, "PASS", message);
+    assert.equal(skipped.preview.checks?.find((check) => check.code === "daily")?.result, "PASS", message);
+    assert.equal(skipped.preview.checks?.find((check) => check.code === "recipient")?.result, "PASS", message);
+    assert.equal(skipped.preview.checks?.find((check) => check.code === "balance")?.result, "SKIPPED", message);
+    assert.equal(skipped.explanation, sentence, message);
+    assert.equal(/available 0/i.test(skipped.explanation), false, message);
+
+    const funded = guardTransferCommand(message, { action: "transfer", amount: "0.01redacted_pii_1", token: "" }, policy, nearBook, locale);
+    assert.ok(funded, message);
+    assert.equal(funded.intent.recipient, recipient, message);
+    assert.equal(funded.intent.amount, amount, message);
+    assert.equal(funded.policy_status, "PASS", message);
+    assert.equal(funded.preview.balance, "ok", message);
+    assert.equal(funded.preview.allowed, true, message);
+  }
+});
+
+test("a connected wallet with too little NEAR is insufficient, not blocked", () => {
+  const dust = { public: { "nep141:wrap.near": 1n }, confidential: {}, prices: { "nep141:wrap.near": 3.42 } };
+  const guarded = guardTransferCommand("Send 0.01 NEAR to alice.testnet", { action: "transfer" }, policy, dust, "en");
+  assert.ok(guarded);
+  assert.equal(guarded.policy_status, "INSUFFICIENT_BALANCE");
+  assert.notEqual(guarded.policy_status, "BLOCKED");
+  assert.ok(guarded.risk_score < 90);
+  assert.equal(guarded.preview.policyAllowed, true);
+  assert.equal(guarded.preview.allowed, false);
+  assert.match(guarded.explanation, /Insufficient balance\./);
+  assert.match(guarded.explanation, /https:\/\/docs\.near\.org\/getting-started\/faucet/);
+  assert.equal(/is blocked/i.test(guarded.explanation), false);
+  assert.equal(/available 0/i.test(guarded.explanation), false);
+});
+
+test("a real limit breach stays BLOCKED even without a wallet", () => {
+  const guarded = guardTransferCommand(
+    "Send 1000 NEAR to alice.testnet",
+    { action: "transfer" },
+    policy,
+    { public: {}, confidential: {}, prices: {} },
+    "en",
+  );
+  assert.ok(guarded);
+  assert.equal(guarded.policy_status, "BLOCKED");
+  assert.ok(guarded.risk_score >= 90);
+  assert.equal(guarded.preview.policyAllowed, false);
 });
 
 test("general questions are not rejected as transfers", () => {

@@ -9,12 +9,15 @@ import {
   runDryRunPreview,
   setEmergencyFreeze,
   updateOwnerPolicy,
+  type BalanceBook,
   type TeeProofInput,
 } from "@/lib/intents-agent";
 import { getVaultInfo, listExecutions, recordVerifiedExecution, type VerifiedExecution } from "@/lib/near-vault-rpc";
 import { anchorExecutionReceipt, overlayReceiptRows, saveReceiptTxHash } from "@/lib/receipt-service";
 import type { AegisIntent } from "@/lib/dashboard-types";
 import { adminCookieInit, adminSessionValid, allowAdminAttempt, checkAdminCode, ownerProofRequired, signAdminSession } from "@/lib/admin-session";
+import { connectedWalletAccount } from "@/lib/ai-rate-limit";
+import { nearBalanceBook, viewAccountYocto } from "@/lib/near-balance";
 import { configuredOwnerId, DEFAULT_CONTRACT_ID, DEMO_OWNER_ID, isPlausibleTxHash, publicNetwork, strictOwnerMode, walletProofAttached } from "@/lib/wallet-proof";
 import { requireOwnerProof, WalletAuthError } from "@/lib/wallet-verify";
 
@@ -89,7 +92,7 @@ export async function POST(request: Request) {
   const signerAccountId = useWallet ? proofAccountId(record.wallet) : serverSignerAccount();
   try {
     if (type === "dry_run") {
-      const preview = await runDryRunPreview(payload.intent);
+      const preview = await runDryRunPreview(payload.intent, await dryRunBook(request));
       return NextResponse.json({ type, preview });
     }
     if (type === "execute") {
@@ -251,6 +254,14 @@ function proofAccountId(value: unknown): string {
   if (!value || typeof value !== "object" || Array.isArray(value)) return "";
   const accountId = (value as { accountId?: unknown }).accountId;
   return typeof accountId === "string" ? accountId.trim() : "";
+}
+
+async function dryRunBook(request: Request): Promise<BalanceBook> {
+  const skipped: BalanceBook = { public: {}, confidential: {}, prices: {}, skipBalance: true };
+  const account = connectedWalletAccount(request.headers.get("x-kotha-account"));
+  if (!account) return skipped;
+  const yocto = await viewAccountYocto(account);
+  return yocto ? nearBalanceBook(yocto) : skipped;
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

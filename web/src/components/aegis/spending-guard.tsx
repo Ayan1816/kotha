@@ -1,6 +1,6 @@
 "use client";
 
-import { QuoteBody } from "@/components/aegis/audit-panel";
+import { DryRunChecks, QuoteBody, dryRunLabel, dryRunTone } from "@/components/aegis/audit-panel";
 import { translate, type Lang } from "@/components/aegis/copy";
 import type { AegisIntent, ActivePolicy, DryRunPreview } from "@/lib/dashboard-types";
 
@@ -91,18 +91,22 @@ export function SpendingGuard({
 function DryRunCard({ lang, dryRun }: { lang: Lang; dryRun: DryRunPreview }) {
   const impact = dryRun.budgetImpact;
   const remaining = Math.max(0, impact.dailyLimitUsd - impact.projectedSpentUsd);
+  const tone = dryRunTone(dryRun);
+  const shell =
+    tone === "fail" ? "border-[#FF3B5C]/50 bg-[#FF3B5C]/10" : tone === "warn" ? "border-[#FF8A00]/40 bg-[#FF8A00]/10" : "border-[#00EC97]/40 bg-[#00EC97]/10";
+  const title = tone === "fail" ? "text-[#ffb3c0]" : tone === "warn" ? "text-[#ffd7a1]" : "text-[#00EC97]";
+  const warning = dryRun.warnings.find((item) => item !== "INSUFFICIENT_BALANCE" && item !== "BALANCE_SKIPPED");
   return (
-    <div className={`mt-4 rounded-2xl border p-4 ${dryRun.allowed ? "border-[#00EC97]/40 bg-[#00EC97]/10" : "border-[#FF3B5C]/50 bg-[#FF3B5C]/10"}`}>
-      <p className={`text-sm font-semibold uppercase ${dryRun.allowed ? "text-[#00EC97]" : "text-[#ffb3c0]"}`}>
-        {dryRun.allowed ? translate(lang, "pass") : translate(lang, "blocked")}
-      </p>
+    <div className={`mt-4 rounded-2xl border p-4 ${shell}`}>
+      <p className={`text-sm font-semibold uppercase ${title}`}>{dryRunLabel(lang, dryRun)}</p>
+      <DryRunChecks lang={lang} dryRun={dryRun} />
       <p className="mt-2 text-sm text-white">
         {translate(lang, "projectedSpend")} ${impact.projectedSpentUsd.toFixed(2)} = {translate(lang, "usedToday")} ${impact.currentSpentUsd.toFixed(2)} + ${impact.txUsd.toFixed(2)}
       </p>
       <p className="mt-1 text-sm text-white/80">
         {translate(lang, "remainingLimit")} ${remaining.toFixed(2)}
       </p>
-      {dryRun.warnings[0] ? <p className="mt-2 text-sm text-[#ffd7a1]">{dryRun.warnings[0]}</p> : null}
+      {warning ? <p className="mt-2 text-sm text-[#ffd7a1]">{warning}</p> : null}
     </div>
   );
 }

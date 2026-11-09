@@ -91,8 +91,17 @@ export type AegisIntent = {
   confidential: boolean;
 };
 
+export type PolicyCheck = {
+  code: "perTx" | "daily" | "recipient" | "balance";
+  result: "PASS" | "FAIL" | "SKIPPED";
+};
+
 export type DryRunPreview = {
   allowed: boolean;
+  /** Policy gates only. Missing balance does not flip this. */
+  policyAllowed?: boolean;
+  balance?: "ok" | "skipped" | "insufficient";
+  checks?: PolicyCheck[];
   quote: {
     expectedAmountOut: string;
     rate: string;
@@ -261,6 +270,8 @@ export type BalanceBook = {
   public: Record<string, bigint>;
   confidential: Record<string, bigint>;
   prices: Record<string, number>;
+  /** No wallet, or the RPC balance is unknown. Do not treat a missing figure as zero. */
+  skipBalance?: boolean;
 };
 
 type Notional = {
@@ -530,7 +541,24 @@ export function normalizeBalancesContext(ctx: unknown): BalanceBook {
       if (Number.isFinite(numeric) && numeric > 0) book.prices[canonicalAsset(asset)] = numeric;
     }
   }
-  return book;
+  const skipBalance =
+    root.balanceAvailable === false ||
+    (Object.keys(book.public).length === 0 && Object.keys(book.confidential).length === 0);
+  return skipBalance ? { ...book, skipBalance: true } : book;
+}
+
+function policyChecks(
+  intent: AegisIntent,
+  warnings: string[],
+  balance: "ok" | "skipped" | "insufficient",
+): PolicyCheck[] {
+  const needsRecipient = intent.action === "transfer" || intent.action === "withdraw";
+  return [
+    { code: "perTx", result: warnings.some((warning) => warning.startsWith("PROHORI_PER_TX_LIMIT_EXCEEDED")) ? "FAIL" : "PASS" },
+    { code: "daily", result: warnings.some((warning) => warning.startsWith("PROHORI_DAILY_BUDGET_EXCEEDED")) ? "FAIL" : "PASS" },
+    { code: "recipient", result: needsRecipient && intent.recipient.trim().length === 0 ? "FAIL" : "PASS" },
+    { code: "balance", result: balance === "skipped" ? "SKIPPED" : balance === "insufficient" ? "FAIL" : "PASS" },
+  ];
 }
 
 export function previewIntent(intent: AegisIntent, policy: ActivePolicy, balances: BalanceBook): DryRunPreview {
@@ -602,16 +630,14 @@ export function previewIntent(intent: AegisIntent, policy: ActivePolicy, balance
     intent.action === "shield" ? "public" : intent.action === "unshield" || intent.confidential ? "confidential" : "public";
   const bookEmpty = Object.keys(balances.public).length === 0 && Object.keys(balances.confidential).length === 0;
   const listed = Object.prototype.hasOwnProperty.call(balances[spendShard], origin.asset_id);
-  if (!listed && bookEmpty) {
-    allowed = false;
-    warnings.push("BALANCE_UNAVAILABLE");
+  let balance: "ok" | "skipped" | "insufficient" = "ok";
+  if (balances.skipBalance === true || bookEmpty) {
+    balance = "skipped";
   } else {
     const available = balances[spendShard][origin.asset_id] ?? BigInt(0);
-    if (notional.atomic > available) {
-      allowed = false;
-      warnings.push(
-        `Insufficient ${spendShard === "confidential" ? "intents.far" : "intents.near"} balance for ${origin.symbol}: available ${atomicToHuman(available, origin.decimals)}, required ${notional.human}.`,
-      );
+    if (!listed || notional.atomic > available) {
+      balance = "insufficient";
+      warnings.push("INSUFFICIENT_BALANCE");
     }
   }
   if (txUsd > policy.perTxCapUsd + 1e-9) {
@@ -626,7 +652,9 @@ export function previewIntent(intent: AegisIntent, policy: ActivePolicy, balance
       `PROHORI_DAILY_BUDGET_EXCEEDED: spent today is $${currentSpentUsd.toFixed(2)}, this ${intent.action} is $${txUsd.toFixed(2)}, projected $${projected.toFixed(2)} of the $${daily.toFixed(2)} daily limit.`,
     );
   }
-  if (allowed && daily > 0 && projected / daily >= 0.8) {
+  const policyAllowed = allowed;
+  if (balance !== "ok") allowed = false;
+  if (policyAllowed && daily > 0 && projected / daily >= 0.8) {
     warnings.push(
       `Daily budget utilization would reach ${utilizationPct.toFixed(1)}% ($${projected.toFixed(2)} of $${daily.toFixed(2)}).`,
     );
@@ -634,6 +662,9 @@ export function previewIntent(intent: AegisIntent, policy: ActivePolicy, balance
 
   return {
     allowed,
+    policyAllowed,
+    balance,
+    checks: policyChecks(intent, warnings, balance),
     quote: {
       expectedAmountOut: formatHuman(expectedOut, destination.decimals),
       rate: formatRate(rate),
@@ -1065,6 +1096,7 @@ function mergeRemoteQuote(local: DryRunPreview, remote: QuoteResponse | null): D
       warning.code === "insufficient_balance"
     ) {
       local.allowed = false;
+      local.policyAllowed = false;
     }
   }
   const feeUsd = remote.fee?.amount_usd != null ? finiteNumber(remote.fee.amount_usd, local.quote.feeUsd) : local.quote.feeUsd;
@@ -1074,6 +1106,7 @@ function mergeRemoteQuote(local: DryRunPreview, remote: QuoteResponse | null): D
   const daily = local.budgetImpact.dailyLimitUsd;
   if (spend.projectedSpentUsd > daily + 1e-9 && !warnings.some((warning) => warning.startsWith("PROHORI_DAILY_BUDGET_EXCEEDED"))) {
     local.allowed = false;
+    local.policyAllowed = false;
     warnings.push(
       `PROHORI_DAILY_BUDGET_EXCEEDED: spent today is $${spend.currentSpentUsd.toFixed(2)}, this action is $${spend.txUsd.toFixed(2)}, projected $${spend.projectedSpentUsd.toFixed(2)} of the $${daily.toFixed(2)} daily limit.`,
     );

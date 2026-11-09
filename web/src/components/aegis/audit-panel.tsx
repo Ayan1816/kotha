@@ -123,20 +123,65 @@ export function AuditPanel({
   );
 }
 
+const CHECK_LABEL = {
+  perTx: "perTxLimit",
+  daily: "checkDaily",
+  recipient: "recipientFormat",
+  balance: "balanceCheck",
+} as const;
+
+export function dryRunTone(dryRun: DryRunPreview): "pass" | "warn" | "fail" {
+  if (dryRun.balance === "skipped" && dryRun.policyAllowed !== false) return "pass";
+  if (dryRun.balance === "insufficient" && dryRun.policyAllowed !== false) return "warn";
+  return dryRun.allowed ? "pass" : "fail";
+}
+
+export function dryRunLabel(lang: Lang, dryRun: DryRunPreview): string {
+  if (dryRun.balance === "skipped" && dryRun.policyAllowed !== false) return translate(lang, "passUnchecked");
+  if (dryRun.balance === "insufficient" && dryRun.policyAllowed !== false) return translate(lang, "insufficientBadge");
+  return dryRun.allowed ? translate(lang, "pass") : translate(lang, "blocked");
+}
+
+export function DryRunChecks({ lang, dryRun }: { lang: Lang; dryRun: DryRunPreview }) {
+  if (!dryRun.checks?.length) return null;
+  return (
+    <ul className="mt-3 space-y-1 text-xs">
+      {dryRun.checks.map((check) => (
+        <li key={check.code} className="flex items-center justify-between gap-3">
+          <span className="text-white/70">{translate(lang, CHECK_LABEL[check.code])}</span>
+          <span className={check.result === "FAIL" ? "text-[#ffb3c0]" : check.result === "SKIPPED" ? "text-[#ffd7a1]" : "text-[#00EC97]"}>
+            {check.result === "SKIPPED" ? translate(lang, "balanceSkipped") : check.result === "FAIL" ? translate(lang, "checkFail") : translate(lang, "pass")}
+          </span>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function warningLabel(lang: Lang, warning: string): string {
+  if (warning === "INSUFFICIENT_BALANCE") return translate(lang, "insufficientBadge");
+  if (warning === "BALANCE_SKIPPED") return translate(lang, "balanceSkipped");
+  return warning;
+}
+
 export function QuoteBody({ lang, intent, dryRun, remittanceLine }: { lang: Lang; intent: AegisIntent; dryRun: DryRunPreview; remittanceLine: string | null }) {
   const origin = assetLabel(intent.origin_asset);
   const destination = assetLabel(intent.destination_asset);
   const impact = dryRun.budgetImpact;
   const width = Math.max(0, Math.min(100, impact.utilizationPct));
-  const bar = dryRun.allowed ? (width >= 80 ? "bg-[#FF8A00]" : "bg-[#00EC97]") : "bg-[#FF3B5C]";
+  const tone = dryRunTone(dryRun);
+  const bar = tone === "fail" ? "bg-[#FF3B5C]" : tone === "warn" || width >= 80 ? "bg-[#FF8A00]" : "bg-[#00EC97]";
+  const badge =
+    tone === "fail" ? "border-[#FF3B5C]/50 text-[#ffb3c0]" : tone === "warn" ? "border-[#FF8A00]/50 text-[#ffd7a1]" : "border-[#00EC97]/40 text-[#00EC97]";
   return (
     <div className="space-y-3 text-sm">
       <div className="flex flex-wrap items-center gap-2">
         <span className={`rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase ${actionTone(intent.action)}`}>{intent.action}</span>
-        <span className={`rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase ${dryRun.allowed ? "border-[#00EC97]/40 text-[#00EC97]" : "border-[#FF3B5C]/50 text-[#ffb3c0]"}`}>
-          {dryRun.allowed ? translate(lang, "pass") : translate(lang, "blocked")}
+        <span className={`rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase ${badge}`}>
+          {dryRunLabel(lang, dryRun)}
         </span>
       </div>
+      <DryRunChecks lang={lang} dryRun={dryRun} />
       <dl className="grid grid-cols-1 gap-2 text-xs min-[376px]:grid-cols-2">
         <Info label={translate(lang, "amount")} value={`${intent.amount} ${origin.symbol}`} />
         <Info label={translate(lang, "expected")} value={`${dryRun.quote.expectedAmountOut} ${destination.symbol}`} />
@@ -168,7 +213,7 @@ export function QuoteBody({ lang, intent, dryRun, remittanceLine }: { lang: Lang
         ) : (
           <ul className="mt-1 list-disc space-y-1 pl-4 text-xs text-[#ffd7a1]">
             {dryRun.warnings.map((warning) => (
-              <li key={warning}>{warning}</li>
+              <li key={warning}>{warningLabel(lang, warning)}</li>
             ))}
           </ul>
         )}

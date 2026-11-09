@@ -4,7 +4,7 @@ import { useKothaSession } from "@/app/providers";
 import { ApiKeyCard } from "@/components/aegis/api-key-card";
 import { DeckRequestError, fetchDashboard, fetchTeeCatalog, postAdminLock, postAdminUnlock, postDryRun, postExecute, postFreeze, postGrant, postPolicy, postSaveTx, postTeeChatStream, postTranslate } from "@/components/aegis/api";
 import type { ChainLink } from "@/components/aegis/audit-panel";
-import { CopilotPanel, type ChatMessage } from "@/components/aegis/copilot-panel";
+import { CopilotPanel, isChipKey, type ChatMessage } from "@/components/aegis/copilot-panel";
 import { translate, type Lang } from "@/components/aegis/copy";
 import { PhoneBook } from "@/components/aegis/phone-book";
 import { PolicyPanel } from "@/components/aegis/policy-panel";
@@ -156,6 +156,7 @@ export function CommandDeck() {
     const pending = messages.filter((message) => {
       if (message.role !== "assistant" || message.errorCode) return false;
       if (message.lang !== "bn" && message.lang !== "en") return false;
+      if (message.translationFailed) return false;
       if (message.lang === lang || message.translations?.[lang]) return false;
       return !translateFlight.current.has(`${message.id}:${lang}`);
     });
@@ -168,9 +169,9 @@ export function CommandDeck() {
       pending.map(async (message) => {
         try {
           const text = await postTranslate({ text: message.text, target, accountId });
-          return { id: message.id, text };
+          return { id: message.id, text, failed: false };
         } catch {
-          return { id: message.id, text: message.text };
+          return { id: message.id, text: "", failed: true };
         }
       }),
     ).then((results) => {
@@ -179,9 +180,11 @@ export function CommandDeck() {
         current.map((message) => {
           const found = results.find((item) => item.id === message.id);
           if (!found) return message;
+          if (found.failed) return { ...message, translating: false, translationFailed: true };
           return {
             ...message,
             translating: false,
+            translationFailed: false,
             translations: { ...message.translations, [target]: found.text },
           };
         }),
@@ -248,14 +251,33 @@ export function CommandDeck() {
     setRemittanceLine(resolution?.line ?? null);
   }
 
-  async function send(text: string) {
-    const id = crypto.randomUUID();
+  function retryMessage(id: string) {
+    const message = messages.find((item) => item.id === id);
+    if (!message || message.role !== "user" || thinking) return;
+    void send(message.text, message.chipKey, id);
+  }
+
+  function retryTranslation(id: string) {
+    if (lang !== "bn" && lang !== "en") return;
+    translateFlight.current.delete(`${id}:${lang}`);
+    setMessages((current) =>
+      current.map((message) => (message.id === id ? { ...message, translationFailed: false, translating: false } : message)),
+    );
+  }
+
+  async function send(text: string, chipKey?: string, existingId?: string) {
+    const id = existingId || crypto.randomUUID();
     setQuote(null);
     setQuoteError(null);
     setChatStep("redacting");
     void refreshRemittance(text);
     setLiveText("");
-    setMessages((current) => [...current, { id, role: "user", lang: textLang(text, lang), text }]);
+    if (!existingId) {
+      setMessages((current) => [
+        ...current,
+        { id, role: "user", lang: textLang(text, lang), text, chipKey: isChipKey(chipKey) ? chipKey : undefined },
+      ]);
+    }
     try {
       const result = await run("chat", async () => {
         return postTeeChatStream(
@@ -308,15 +330,16 @@ export function CommandDeck() {
       });
     } catch (error) {
       const code = aiLimitCode(error);
-      const message = aiLimitText(lang, error) || (error instanceof Error ? error.message : translate(lang, "loadFail"));
+      const timeout = error instanceof DeckRequestError && error.code === "request_timeout";
+      const message = timeout ? "" : aiLimitText(lang, error) || (error instanceof Error ? error.message : translate(lang, "loadFail"));
       setMessages((current) => [
         ...current,
         {
           id: crypto.randomUUID(),
           role: "assistant",
           lang,
-          text: code ? "" : message,
-          errorCode: code || (message === translate(lang, "loadFail") ? "load_fail" : undefined),
+          text: (code || timeout) ? "" : message,
+          errorCode: timeout ? "request_timeout" : code || (message === translate(lang, "loadFail") ? "load_fail" : undefined),
         },
       ]);
       setQuote(null);
@@ -359,7 +382,7 @@ export function CommandDeck() {
       await refresh();
       if (!intent) return;
       try {
-        const dry = await run("quote", () => postDryRun(intent));
+        const dry = await run("quote", () => postDryRun(intent, accountId));
         publishPreview(intent, dry.preview);
       } catch (error) {
         if (error instanceof DeckRequestError && error.preview) publishPreview(intent, error.preview);
@@ -438,7 +461,7 @@ export function CommandDeck() {
     if (!quote) return;
     const intent = quote.intent;
     try {
-      const result = await run("quote", () => postDryRun(intent));
+      const result = await run("quote", () => postDryRun(intent, accountId));
       publishPreview(intent, result.preview);
     } catch (error) {
       if (error instanceof DeckRequestError && error.preview) publishPreview(intent, error.preview);
@@ -624,7 +647,9 @@ export function CommandDeck() {
             walletConnected={Boolean(accountId)}
             nearBalance={accountId ? nearBalance : null}
             onAutoRedact={setAutoRedact}
-            onSend={(text) => void send(text)}
+            onSend={(text, chipKey) => void send(text, chipKey)}
+            onRetry={retryMessage}
+            onRetryTranslate={retryTranslation}
             onDryRun={() => {
               setTab("guard");
               void refreshQuote();
@@ -798,7 +823,9 @@ function readStoredMessages(value: unknown): ChatMessage[] {
       role: record.role,
       lang,
       text: record.text,
+      chipKey: isChipKey(record.chipKey) ? record.chipKey : undefined,
       translations,
+      translationFailed: record.translationFailed === true,
       statusCode: typeof record.statusCode === "string" ? record.statusCode : undefined,
       errorCode: typeof record.errorCode === "string" ? record.errorCode : undefined,
       attestation: record.attestation as ChatMessage["attestation"],
@@ -852,6 +879,16 @@ function blockReason(lang: Lang, frozen: boolean, grant: PublicGrant | undefined
   if (frozen) return translate(lang, "frozenReason");
   if (!grant || grant.revoked || !grant.active || Date.parse(grant.expiresAt) <= Date.now()) return translate(lang, "grantReason");
   if (!quote) return translate(lang, "noIntentReason");
-  if (!quote.dryRun.allowed) return quote.dryRun.warnings[0] || translate(lang, "blockedReason");
+  const dry = quote.dryRun;
+  if (dry.balance === "skipped" && dry.policyAllowed !== false) return translate(lang, "needsWallet");
+  if (dry.balance === "insufficient" && dry.policyAllowed !== false) return translate(lang, "lowBalance");
+  if (!dry.allowed) return humanWarning(lang, dry.warnings[0]) || translate(lang, "blockedReason");
   return null;
+}
+
+function humanWarning(lang: Lang, warning: string | undefined): string {
+  if (!warning) return "";
+  if (warning === "INSUFFICIENT_BALANCE") return translate(lang, "insufficientBadge");
+  if (warning === "BALANCE_SKIPPED") return translate(lang, "balanceSkipped");
+  return warning;
 }

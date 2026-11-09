@@ -158,7 +158,6 @@ export function PolicyPanel({
                       className="accent-[#00EC97]"
                     />
                     <span>{translate(lang, ACTION_KEY[action])}</span>
-                    <span className="font-mono text-[10px] text-white/35">{action}</span>
                   </label>
                 );
               })}

@@ -9,6 +9,7 @@ import { answerAsQuestion, isGeneralQuestion, normalizeVoiceSpelling } from "./q
 import { directedRecipient, foldDigits, messageTransferTarget, parseAmountToken, readTransferFields, type TransferFields } from "./transfer-parse";
 export { parseTransferCommand, type ParsedTransfer } from "./transfer-parse";
 import { displayReply, interpretChatBody, matchingResponseHash, parseSignedPayload, partialExplanation, type LoaderStep } from "./chat-stream";
+import { publicNetwork, TESTNET_FAUCET_URL } from "./wallet-proof";
 import {
   assetMeta,
   canonicalAsset,
@@ -30,7 +31,7 @@ export const TEE_MODELS = [
 ] as const;
 
 export type TeeModelId = (typeof TEE_MODELS)[number];
-export type PolicyStatus = "PASS" | "WARNING" | "BLOCKED";
+export type PolicyStatus = "PASS" | "WARNING" | "BLOCKED" | "NEEDS_WALLET" | "INSUFFICIENT_BALANCE";
 export type AttestationMode = "hardware-tee" | "unverified";
 
 export type TeeVerification = {
@@ -105,9 +106,10 @@ export type EnclaveTelemetry = {
 
 const DEFAULT_BASE_URL = "https://cloud-api.near.ai/v1";
 const CHAT_TIMEOUT_MS = 60_000;
-const EVIDENCE_TIMEOUT_MS = 60_000;
-const EVIDENCE_RETRIES = 2;
+const EVIDENCE_TIMEOUT_MS = 15_000;
+const EVIDENCE_RETRIES = 1;
 const PRIVACY_TIMEOUT_MS = 8_000;
+const PIPELINE_TIMEOUT_MS = 45_000;
 
 export const CHAT_LOCALES = ["en", "bn", "es", "ar", "hi", "fr", "zh"] as const;
 export type ChatLocale = (typeof CHAT_LOCALES)[number];
@@ -168,8 +170,8 @@ function systemPrompt(locale: ChatLocale, userMessage = ""): string {
     "Use these asset ids only: nep141:wrap.near (wNEAR), nep141:usdt.tether-token.near (USDT), nep141:usdc.near (USDC).",
     "amount is a decimal string in human token units, not atomic units.",
     "confidential is true only when the user explicitly says private, confidential, or গোপন, and for a shield into the private vault. A NEAR account recipient is a public transfer. An E.164 phone number is a remittance transfer and stays public unless those words are present. Never ask for a phone number when the recipient is a NEAR account id (name.near, name.testnet, or 64-hex implicit account), and never use INVALID_RECIPIENT_FORMAT for that account.",
-    "If balanceAvailable is false, or the balance context has no amount, say the balance is unavailable and ask the user to connect a wallet. Never invent balances or token amounts.",
-    "If a NEAR balance is present, use only that figure. Do not mention any other token balance.",
+    "Never invent balances or token amounts. Mention the wallet only when the user asks about a balance or requests a swap, transfer, withdraw, shield, or unshield. Do not start any other answer with a wallet notice.",
+    "If balanceAvailable is false and the user asked for a balance or a transaction, say the balance is unchecked until a wallet is connected. If a NEAR balance is present, use only that figure and do not mention any other token balance.",
     'If the user did not name an action, set action to "none", amount to 0, intent to null, and policy_status to PASS, then answer the question. Never say you could not understand the message, and never reply with only a swap/transfer/withdraw menu.',
     "Shield and unshield move the agent's own balance between intents.near and intents.far. They still count toward today's spend.",
     "Swap, transfer, withdraw, shield, and unshield all count against dailyBudgetUsd. projected spend is current spend plus this transaction. perTxCapUsd applies to every action.",
@@ -205,12 +207,27 @@ export function isTeeModel(value: string): value is TeeModelId {
   return (TEE_MODELS as readonly string[]).includes(value);
 }
 
-export async function redactPII(text: string, apiKey: string | null = nearAiApiKey()): Promise<RedactionResult> {
+export function activeChatModel(): string {
+  const requested = process.env.NEAR_AI_MODEL?.trim() || "";
+  if (requested && isTeeModel(requested)) return requested;
+  return TEE_MODELS[0];
+}
+
+export async function redactPII(
+  text: string,
+  apiKey: string | null = nearAiApiKey(),
+  signal?: AbortSignal,
+): Promise<RedactionResult> {
   return redactSensitiveText(text, {
     apiKey,
     baseUrl: nearAiBaseUrl(),
     timeoutMs: PRIVACY_TIMEOUT_MS,
+    signal,
   });
+}
+
+export function pipelineTimeoutMs(): number {
+  return PIPELINE_TIMEOUT_MS;
 }
 
 export async function runAttestedInference(params: {
@@ -226,12 +243,14 @@ export async function runAttestedInference(params: {
   onStep?: (step: LoaderStep) => void;
   onDelta?: (text: string) => void;
   apiKey?: string | null;
+  signal?: AbortSignal;
 }): Promise<AttestedInference> {
   params.onStep?.("redacting");
   const model = resolveModel(params.model);
   const apiKey = nearAiApiKey(params.apiKey);
   const locale = normalizeChatLocale(params.locale);
-  const redaction = params.autoRedact ? await redactPII(params.userMessage, apiKey) : null;
+  const redaction = params.autoRedact ? await redactPII(params.userMessage, apiKey, params.signal) : null;
+  if (params.signal?.aborted) throw params.signal.reason instanceof Error ? params.signal.reason : new Error("Request timed out. Please try again.");
   const modelMessage = redaction?.redactedText ?? params.userMessage;
   const request = buildChatRequest(model, modelMessage, params.policyContext, params.balancesContext, locale);
   const requestBodyStr = JSON.stringify(request);
@@ -292,8 +311,10 @@ export async function runAttestedInference(params: {
         const explanation = partialExplanation(text);
         if (explanation) params.onDelta?.(explanation);
       },
+      params.signal,
     );
   } catch (error) {
+    if (params.signal?.aborted) throw error;
     return fallback({
       reason: `NEAR AI chat failed: ${errorText(error)}`,
       chatId: "",
@@ -322,6 +343,7 @@ export async function runAttestedInference(params: {
     responseText: chat.text,
     bodySha256: chat.bodySha256,
     chatStatus: chat.status,
+    signal: params.signal,
   });
 }
 
@@ -442,6 +464,7 @@ async function attestHardware(args: {
   responseText: string;
   bodySha256: string;
   chatStatus: number;
+  signal?: AbortSignal;
 }): Promise<AttestedInference> {
   const chatJson = interpretChatBody(args.responseText);
   const content = extractAssistantContent(chatJson);
@@ -483,11 +506,13 @@ async function attestHardware(args: {
       `${base}/signature/${encodeURIComponent(chatId)}?model=${encodeURIComponent(args.model)}&signing_algo=ecdsa`,
       args.apiKey,
       "signature",
+      args.signal,
     ),
     fetchEvidence(
       `${base}/attestation/report?model=${encodeURIComponent(args.model)}&signing_algo=ecdsa&nonce=${nonce}`,
       args.apiKey,
       "attestation",
+      args.signal,
     ),
   ]);
   const checked = verifyCloudEvidence({
@@ -695,37 +720,73 @@ export function guardTransferCommand(
     painted.confidential = false;
   }
   const preview = previewIntent(painted, policy, balances);
-  const policyStatus: PolicyStatus = preview.allowed ? (preview.warnings.length > 0 ? "WARNING" : "PASS") : "BLOCKED";
+  const policyStatus = statusFromPreview(preview);
   const redactionNote =
     redaction && redaction.redactionsCount > 0 ? " Personal data was masked before the prompt left the privacy boundary." : "";
-  const explanation = preview.warnings.includes("BALANCE_UNAVAILABLE")
-    ? balanceUnavailableLine(locale, message)
-    : bilingualExplanation(foldPrompt(message), painted, preview, policyStatus, false, redactionNote, locale);
+  const explanation = explanationFor(foldPrompt(message), painted, preview, policyStatus, false, redactionNote, locale);
   return {
     intent: painted,
     preview,
     explanation,
     policy_status: policyStatus,
     policy_reason: reasonFor(policyStatus, painted, preview),
-    risk_score: scoreRisk(policyStatus, preview.budgetImpact.txUsd, policy.perTxCapUsd),
+    risk_score: scoreRisk(riskBasis(preview), preview.budgetImpact.txUsd, policy.perTxCapUsd),
   };
 }
 
-function balanceUnavailableLine(locale: ChatLocale, message: string): string {
-  if (locale === "bn" || hasBengali(message)) return "ব্যালেন্স পাওয়া যাচ্ছে না। একটি ওয়ালেট যুক্ত করুন।";
-  return "Balance is unavailable. Connect a wallet.";
+function needsWalletLine(locale: ChatLocale, message: string): string {
+  if (locale === "bn" || hasBengali(message)) return "প্রিভিউ তৈরি। ব্যালান্স দেখতে ও সম্পাদন করতে ওয়ালেট যুক্ত করুন।";
+  return "Preview ready. Connect your wallet to check balance and execute.";
+}
+
+function insufficientLine(locale: ChatLocale, message: string): string {
+  const faucet = publicNetwork() === "mainnet" ? "" : ` ${TESTNET_FAUCET_URL}`;
+  if (locale === "bn" || hasBengali(message)) return `পর্যাপ্ত ব্যালেন্স নেই।${faucet}`;
+  return `Insufficient balance.${faucet}`;
+}
+
+function statusFromPreview(preview: DryRunPreview): PolicyStatus {
+  if (preview.policyAllowed === false) return "BLOCKED";
+  if (preview.balance === "insufficient") return "INSUFFICIENT_BALANCE";
+  if (preview.balance === "skipped") return "NEEDS_WALLET";
+  if (preview.warnings.some((warning) => warning.startsWith("Daily budget utilization"))) return "WARNING";
+  if (preview.policyAllowed == null && !preview.allowed) return "BLOCKED";
+  return "PASS";
+}
+
+function riskBasis(preview: DryRunPreview): "PASS" | "WARNING" | "BLOCKED" {
+  if (preview.policyAllowed === false || (preview.policyAllowed == null && !preview.allowed && preview.balance !== "skipped" && preview.balance !== "insufficient")) {
+    return "BLOCKED";
+  }
+  if (preview.warnings.some((warning) => warning.startsWith("Daily budget utilization"))) return "WARNING";
+  return "PASS";
+}
+
+function explanationFor(
+  folded: string,
+  intent: AegisIntent,
+  preview: DryRunPreview,
+  status: PolicyStatus,
+  assumedAmount: boolean,
+  redactionNote: string,
+  locale: ChatLocale,
+): string {
+  if (status === "NEEDS_WALLET") return needsWalletLine(locale, folded);
+  if (status === "INSUFFICIENT_BALANCE") return insufficientLine(locale, folded);
+  return bilingualExplanation(folded, intent, preview, status, assumedAmount, redactionNote, locale);
 }
 
 function reasonFor(status: PolicyStatus, intent: AegisIntent, preview: DryRunPreview): string {
-  if (preview.warnings.includes("BALANCE_UNAVAILABLE")) return "BALANCE_UNAVAILABLE";
-  if (status === "PASS") return passReason(intent, preview);
+  if (status === "NEEDS_WALLET") return "NEEDS_WALLET";
+  if (status === "INSUFFICIENT_BALANCE") return "INSUFFICIENT_BALANCE";
+  if (status === "PASS" || status === "WARNING") return status === "WARNING" ? preview.warnings.join(" ") : passReason(intent, preview);
   const limitReason = preview.warnings.filter((warning) => warning.startsWith("PROHORI_")).join(" ");
   return [limitReason, warningText(preview.warnings)].filter((part) => part.length > 0).join(" ");
 }
 
 function warningText(warnings: string[]): string {
   return warnings
-    .map((warning) => (warning === "BALANCE_UNAVAILABLE" ? "Balance is unavailable. Connect a wallet." : warning))
+    .filter((warning) => warning !== "INSUFFICIENT_BALANCE" && warning !== "BALANCE_SKIPPED")
     .filter((warning) => warning.length > 0)
     .join(" ");
 }
@@ -788,15 +849,15 @@ function decideLocally(
     };
   }
   const preview = previewIntent(drafted.intent, policy, balances);
-  const policyStatus = preview.allowed ? (preview.warnings.length > 0 ? "WARNING" : "PASS") : "BLOCKED";
+  const policyStatus = statusFromPreview(preview);
   const redactionNote =
     redaction && redaction.redactionsCount > 0
       ? " Personal data was masked before the prompt left the privacy boundary."
       : "";
-  const explanation = bilingualExplanation(folded, drafted.intent, preview, policyStatus, drafted.assumedAmount, redactionNote, locale);
+  const explanation = explanationFor(folded, drafted.intent, preview, policyStatus, drafted.assumedAmount, redactionNote, locale);
   return {
-    explanation: preview.warnings.includes("BALANCE_UNAVAILABLE") ? balanceUnavailableLine(locale, userMessage) : explanation,
-    risk_score: scoreRisk(policyStatus, preview.budgetImpact.txUsd, policy.perTxCapUsd),
+    explanation,
+    risk_score: scoreRisk(riskBasis(preview), preview.budgetImpact.txUsd, policy.perTxCapUsd),
     policy_status: policyStatus,
     policy_reason: reasonFor(policyStatus, drafted.intent, preview),
     intent: drafted.intent,
@@ -1183,8 +1244,19 @@ function authHeaders(apiKey: string): Record<string, string> {
   return { authorization: `Bearer ${apiKey}`, accept: "application/json", "accept-encoding": "identity" };
 }
 
-async function fetchText(url: string, init: RequestInit, timeoutMs: number): Promise<{ status: number; text: string }> {
-  const response = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+function withTimeout(timeoutMs: number, parent?: AbortSignal): AbortSignal {
+  const timeout = AbortSignal.timeout(timeoutMs);
+  if (!parent) return timeout;
+  return AbortSignal.any([timeout, parent]);
+}
+
+async function fetchText(
+  url: string,
+  init: RequestInit,
+  timeoutMs: number,
+  parent?: AbortSignal,
+): Promise<{ status: number; text: string }> {
+  const response = await fetch(url, { ...init, signal: withTimeout(timeoutMs, parent) });
   return { status: response.status, text: await response.text() };
 }
 
@@ -1193,8 +1265,9 @@ async function fetchChatText(
   init: RequestInit,
   timeoutMs: number,
   onText?: (text: string) => void,
+  parent?: AbortSignal,
 ): Promise<{ status: number; text: string; bodySha256: string }> {
-  const response = await fetch(url, { ...init, signal: AbortSignal.timeout(timeoutMs) });
+  const response = await fetch(url, { ...init, signal: withTimeout(timeoutMs, parent) });
   const reader = response.body?.getReader();
   if (!reader) {
     const buffer = new Uint8Array(await response.arrayBuffer());
@@ -1221,11 +1294,13 @@ async function fetchEvidence(
   url: string,
   apiKey: string,
   kind: "signature" | "attestation",
+  parent?: AbortSignal,
 ): Promise<{ json: unknown; error: string | null }> {
   let last = "request failed";
   for (let attempt = 0; attempt <= EVIDENCE_RETRIES; attempt += 1) {
+    if (parent?.aborted) throw parent.reason instanceof Error ? parent.reason : new Error("Request timed out. Please try again.");
     try {
-      const response = await fetchText(url, { method: "GET", headers: authHeaders(apiKey) }, EVIDENCE_TIMEOUT_MS);
+      const response = await fetchText(url, { method: "GET", headers: authHeaders(apiKey) }, EVIDENCE_TIMEOUT_MS, parent);
       const parsed = parseJson(response.text);
       if (response.status < 200 || response.status >= 300) {
         last = `HTTP ${response.status}`;
@@ -1238,6 +1313,7 @@ async function fetchEvidence(
       }
       return { json: parsed, error: null };
     } catch (error) {
+      if (parent?.aborted) throw error;
       last = errorText(error);
     }
   }
@@ -1265,7 +1341,7 @@ function errorMessage(record: Record<string, unknown>): string {
 
 function errorText(error: unknown): string {
   if (error instanceof Error) {
-    if (error.name === "TimeoutError" || error.name === "AbortError") return "timed out after 60s";
+    if (error.name === "TimeoutError" || error.name === "AbortError") return "timed out";
     return error.message;
   }
   return "request failed";

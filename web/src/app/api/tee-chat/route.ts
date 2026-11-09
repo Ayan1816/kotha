@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { connectedWalletAccount, limitAiRequest } from "@/lib/ai-rate-limit";
 import { getAgentState, runDryRunPreview, type BalanceBook } from "@/lib/intents-agent";
 import { nearBalanceBook, unavailableBalanceContext, viewAccountYocto, walletBalanceContext } from "@/lib/near-balance";
-import { isTeeModel, normalizeChatLocale, readEnclaveTelemetry, runAttestedInference, TEE_MODELS, type ChatLocale } from "@/lib/near-ai-tee";
+import { isTeeModel, normalizeChatLocale, pipelineTimeoutMs, readEnclaveTelemetry, runAttestedInference, TEE_MODELS, type ChatLocale } from "@/lib/near-ai-tee";
 import type { LoaderStep } from "@/lib/chat-stream";
 
 type ChatBalance = { balancesContext: unknown; balanceBook: BalanceBook | null };
@@ -62,6 +62,12 @@ export async function POST(request: Request) {
   }
 }
 
+function pipelineSignal(): { signal: AbortSignal; cancel: () => void } {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), pipelineTimeoutMs());
+  return { signal: controller.signal, cancel: () => clearTimeout(timer) };
+}
+
 async function streamChat(input: ChatInput) {
   const encoder = new TextEncoder();
   const stream = new ReadableStream({
@@ -70,24 +76,37 @@ async function streamChat(input: ChatInput) {
         controller.enqueue(encoder.encode(`event: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
       };
       let terminal = false;
+      const pipeline = pipelineSignal();
       try {
         send("step", { step: "redacting" satisfies LoaderStep });
-        const attestation = await infer(input, {
-          onStep: (step) => {
-            if (step !== "policy") send("step", { step });
+        const attestation = await infer(
+          input,
+          {
+            onStep: (step) => {
+              if (step !== "policy") send("step", { step });
+            },
+            onDelta: (text) => send("delta", { text }),
           },
-          onDelta: (text) => send("delta", { text }),
-        });
+          pipeline.signal,
+        );
+        if (pipeline.signal.aborted) throw new Error("Request timed out. Please try again.");
         send("step", { step: "policy" satisfies LoaderStep });
-        const dryRun = attestation.decision.intent ? await runDryRunPreview(attestation.decision.intent, input.balanceBook) : null;
+        const dryRun = attestation.decision.intent ? await runDryRunPreview(attestation.decision.intent, chatBalanceBook(input)) : null;
         send("done", { attestation, dryRun });
         terminal = true;
       } catch (error) {
-        const messageText = error instanceof Error ? error.message : "TEE inference failed.";
-        const status = messageText.startsWith("Unsupported TEE model") ? 400 : 500;
-        send("error", { error: { code: status === 400 ? "unsupported_model" : "tee_failed", message: messageText } });
+        const timedOut = pipeline.signal.aborted || (error instanceof Error && error.name === "TimeoutError");
+        const messageText = timedOut ? "Request timed out. Please try again." : error instanceof Error ? error.message : "TEE inference failed.";
+        const status = !timedOut && messageText.startsWith("Unsupported TEE model") ? 400 : 500;
+        send("error", {
+          error: {
+            code: timedOut ? "request_timeout" : status === 400 ? "unsupported_model" : "tee_failed",
+            message: messageText,
+          },
+        });
         terminal = true;
       } finally {
+        pipeline.cancel();
         if (!terminal) {
           try {
             send("error", { error: { code: "tee_failed", message: "TEE inference failed." } });
@@ -119,12 +138,33 @@ type ChatInput = {
 };
 
 async function runChat(input: ChatInput) {
-  const attestation = await infer(input);
-  const dryRun = attestation.decision.intent ? await runDryRunPreview(attestation.decision.intent, input.balanceBook) : null;
-  return { attestation, dryRun };
+  const pipeline = pipelineSignal();
+  try {
+    const attestation = await infer(input, undefined, pipeline.signal);
+    if (pipeline.signal.aborted) throw new Error("Request timed out. Please try again.");
+    const dryRun = attestation.decision.intent ? await runDryRunPreview(attestation.decision.intent, chatBalanceBook(input)) : null;
+    return { attestation, dryRun };
+  } catch (error) {
+    if (pipeline.signal.aborted) {
+      const timeout = new Error("Request timed out. Please try again.");
+      timeout.name = "TimeoutError";
+      throw timeout;
+    }
+    throw error;
+  } finally {
+    pipeline.cancel();
+  }
 }
 
-async function infer(input: ChatInput, hooks?: { onStep?: (step: LoaderStep) => void; onDelta?: (text: string) => void }) {
+function chatBalanceBook(input: ChatInput): BalanceBook {
+  return input.balanceBook ?? { public: {}, confidential: {}, prices: {}, skipBalance: true };
+}
+
+async function infer(
+  input: ChatInput,
+  hooks?: { onStep?: (step: LoaderStep) => void; onDelta?: (text: string) => void },
+  signal?: AbortSignal,
+) {
   const state = await getAgentState();
   return runAttestedInference({
     userMessage: input.message,
@@ -136,6 +176,7 @@ async function infer(input: ChatInput, hooks?: { onStep?: (step: LoaderStep) => 
     balancesContext: input.balancesContext,
     onStep: hooks?.onStep,
     onDelta: hooks?.onDelta,
+    signal,
   });
 }
 
@@ -154,9 +195,11 @@ function callerKey(request: Request): string | null {
 }
 
 function chatError(error: unknown) {
-  const messageText = error instanceof Error ? error.message : "TEE inference failed.";
-  const status = messageText.startsWith("Unsupported TEE model") ? 400 : 500;
-  return NextResponse.json({ error: { code: status === 400 ? "unsupported_model" : "tee_failed", message: messageText } }, { status });
+  const timedOut = error instanceof Error && (error.name === "TimeoutError" || error.message === "Request timed out. Please try again.");
+  const messageText = timedOut ? "Request timed out. Please try again." : error instanceof Error ? error.message : "TEE inference failed.";
+  const status = timedOut ? 504 : messageText.startsWith("Unsupported TEE model") ? 400 : 500;
+  const code = timedOut ? "request_timeout" : status === 400 ? "unsupported_model" : "tee_failed";
+  return NextResponse.json({ error: { code, message: messageText } }, { status });
 }
 
 function asRecord(value: unknown): Record<string, unknown> {

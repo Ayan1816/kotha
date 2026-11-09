@@ -135,48 +135,58 @@ export async function postTeeChatStream(
   handlers: { onStep?: (step: LoaderStep) => void; onDelta?: (text: string) => void; onDone?: () => void } = {},
 ): Promise<TeeChatResponse> {
   const { accountId, ...payload } = body;
-  const response = await fetch("/api/tee-chat", {
-    method: "POST",
-    credentials: "include",
-    headers: aiHeaders({ "content-type": "application/json", accept: "text/event-stream" }, accountId),
-    body: JSON.stringify({ ...payload, stream: true }),
-  });
-  if (!response.ok) {
-    const data = await readJson(response);
-    throw fail(data, response.status);
-  }
-  if (!response.body) throw new DeckRequestError("bad_response", "TEE chat stream was empty.");
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let donePayload: TeeChatResponse | null = null;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 48_000);
   try {
-  while (true) {
-    const chunk = await reader.read();
-    if (chunk.done) break;
-    buffer += decoder.decode(chunk.value, { stream: true });
-    const parts = buffer.split("\n\n");
-    buffer = parts.pop() ?? "";
-    for (const part of parts) {
-      const parsed = parseSseBlock(part);
-      if (!parsed) continue;
-      if (parsed.event === "step") {
-        const step = isRecord(parsed.data) && typeof parsed.data.step === "string" ? parsed.data.step : "";
-        if (isLoaderStep(step)) handlers.onStep?.(step);
-      } else if (parsed.event === "delta") {
-        const text = isRecord(parsed.data) && typeof parsed.data.text === "string" ? parsed.data.text : "";
-        if (text) handlers.onDelta?.(text);
-      } else if (parsed.event === "error") {
-        const data = parsed.data;
-        throw fail(isRecord(data) ? data : { error: { message: "TEE chat failed." } }, 500);
-      } else if (parsed.event === "done") {
-        donePayload = readTeeChat(parsed.data);
+    const response = await fetch("/api/tee-chat", {
+      method: "POST",
+      credentials: "include",
+      headers: aiHeaders({ "content-type": "application/json", accept: "text/event-stream" }, accountId),
+      body: JSON.stringify({ ...payload, stream: true }),
+      signal: controller.signal,
+    });
+    if (!response.ok) {
+      const data = await readJson(response);
+      throw fail(data, response.status);
+    }
+    if (!response.body) throw new DeckRequestError("bad_response", "TEE chat stream was empty.");
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let donePayload: TeeChatResponse | null = null;
+    while (true) {
+      const chunk = await reader.read();
+      if (chunk.done) break;
+      buffer += decoder.decode(chunk.value, { stream: true });
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop() ?? "";
+      for (const part of parts) {
+        const parsed = parseSseBlock(part);
+        if (!parsed) continue;
+        if (parsed.event === "step") {
+          const step = isRecord(parsed.data) && typeof parsed.data.step === "string" ? parsed.data.step : "";
+          if (isLoaderStep(step)) handlers.onStep?.(step);
+        } else if (parsed.event === "delta") {
+          const text = isRecord(parsed.data) && typeof parsed.data.text === "string" ? parsed.data.text : "";
+          if (text) handlers.onDelta?.(text);
+        } else if (parsed.event === "error") {
+          const data = parsed.data;
+          throw fail(isRecord(data) ? data : { error: { message: "TEE chat failed." } }, 500);
+        } else if (parsed.event === "done") {
+          donePayload = readTeeChat(parsed.data);
+        }
       }
     }
-  }
-  if (!donePayload) throw new DeckRequestError("bad_response", "TEE chat stream ended before a result.");
-  return donePayload;
+    if (!donePayload) throw new DeckRequestError("bad_response", "TEE chat stream ended before a result.");
+    return donePayload;
+  } catch (error) {
+    if (error instanceof DeckRequestError) throw error;
+    if (controller.signal.aborted) {
+      throw new DeckRequestError("request_timeout", "Request timed out. Please try again.");
+    }
+    throw error;
   } finally {
+    clearTimeout(timer);
     handlers.onDone?.();
   }
 }
@@ -200,8 +210,8 @@ export async function postFreeze(frozen: boolean, wallet?: WalletProofWire | nul
   return postIntent<FreezeResponse>("emergency_freeze", { frozen }, wallet);
 }
 
-export async function postDryRun(intent: unknown): Promise<DryRunResponse> {
-  return postIntent<DryRunResponse>("dry_run", { intent });
+export async function postDryRun(intent: unknown, accountId?: string): Promise<DryRunResponse> {
+  return postIntent<DryRunResponse>("dry_run", { intent }, undefined, accountId);
 }
 
 export async function postExecute(
@@ -224,13 +234,16 @@ export async function postAdminLock(): Promise<{ type: "admin_lock"; admin: fals
   return postIntent("admin_lock", {});
 }
 
-async function postIntent<T>(type: string, payload: Record<string, unknown>, wallet?: WalletProofWire | null): Promise<T> {
+async function postIntent<T>(type: string, payload: Record<string, unknown>, wallet?: WalletProofWire | null, accountId?: string): Promise<T> {
   const body: Record<string, unknown> = { type, payload };
   if (wallet) body.wallet = wallet;
+  const headers: Record<string, string> = { "content-type": "application/json" };
+  const account = accountId?.trim() || "";
+  if (account) headers["x-kotha-account"] = account.slice(0, 80);
   const response = await fetch("/api/intents", {
     method: "POST",
     credentials: "include",
-    headers: { "content-type": "application/json" },
+    headers,
     body: JSON.stringify(body),
   });
   const data = await readJson(response);

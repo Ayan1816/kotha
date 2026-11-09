@@ -42,6 +42,34 @@ export function redactDeterministic(input: string): LocalRedaction {
   return applySpans(input, spans);
 }
 
+const AMOUNT_WITH_TOKEN = /(?<![\d.০-৯])([0-9০-৯]+(?:[.][0-9০-৯]+)?)\s*(?:usdc|usdt|wnear|near)\b/gi;
+
+/** Hold token amounts out of the privacy filter, then put the original text back. */
+export function shieldAmounts(text: string): { text: string; amounts: string[] } {
+  const amounts: string[] = [];
+  const next = text.replace(AMOUNT_WITH_TOKEN, (match) => {
+    const token = `KOTHAAMT${amounts.length}`;
+    amounts.push(match);
+    return token;
+  });
+  return { text: next, amounts };
+}
+
+export function restoreAmounts(text: string, amounts: string[]): string {
+  let next = text;
+  for (let index = amounts.length - 1; index >= 0; index -= 1) {
+    next = next.split(`KOTHAAMT${index}`).join(amounts[index] ?? "");
+  }
+  return next;
+}
+
+function amountPlaceholdersKept(text: string, count: number): boolean {
+  for (let index = 0; index < count; index += 1) {
+    if (!text.includes(`KOTHAAMT${index}`)) return false;
+  }
+  return true;
+}
+
 export async function redactSensitiveText(
   text: string,
   options?: {
@@ -49,33 +77,40 @@ export async function redactSensitiveText(
     baseUrl?: string;
     fetchImpl?: typeof fetch;
     timeoutMs?: number;
+    signal?: AbortSignal;
   },
 ): Promise<RedactionResult> {
-  const shielded = shieldNearAccounts(text);
-  const local = redactDeterministic(shielded.text);
+  const accounts = shieldNearAccounts(text);
+  const amounts = shieldAmounts(accounts.text);
+  const shieldedText = amounts.text;
+  const kept = (value: string) =>
+    placeholdersKept(value, accounts.accounts.length) && amountPlaceholdersKept(value, amounts.amounts.length);
+  const local = redactDeterministic(shieldedText);
   const types = new Set<PiiType>(local.types);
   let redactedText = local.text;
   let redactionsCount = local.count;
   const apiKey = options?.apiKey?.trim() || "";
   if (apiKey) {
     try {
-      const remote = await callPrivacyFilter(shielded.text, apiKey, options);
+      const remote = await callPrivacyFilter(shieldedText, apiKey, options);
       for (const piiType of remote.types) types.add(piiType);
-      if (remote.text && placeholdersKept(remote.text, shielded.accounts.length)) {
+      if (remote.text && kept(remote.text)) {
         const tightened = redactDeterministic(remote.text);
         for (const piiType of tightened.types) types.add(piiType);
-        if (tightened.count >= local.count && placeholdersKept(tightened.text, shielded.accounts.length)) {
+        if (tightened.count >= local.count && kept(tightened.text)) {
           redactedText = tightened.text;
         }
         redactionsCount = Math.max(redactionsCount, tightened.count, remote.count ?? 0);
       }
-    } catch {
+    } catch (error) {
+      if (options?.signal?.aborted) throw error;
       // Local redaction already ran. A privacy-filter outage must not leak PII onward.
     }
   }
+  const restored = restoreNearAccounts(restoreAmounts(redactedText, amounts.amounts), accounts.accounts);
   return {
     originalLength: text.length,
-    redactedText: restoreNearAccounts(redactedText, shielded.accounts),
+    redactedText: restored,
     redactionsCount,
     piiTypesFound: [...types],
   };
@@ -252,7 +287,7 @@ function luhn(digits: string): boolean {
 async function callPrivacyFilter(
   text: string,
   apiKey: string,
-  options?: { baseUrl?: string; fetchImpl?: typeof fetch; timeoutMs?: number },
+  options?: { baseUrl?: string; fetchImpl?: typeof fetch; timeoutMs?: number; signal?: AbortSignal },
 ): Promise<{ text?: string; types: PiiType[]; count?: number }> {
   const fetchImpl = options?.fetchImpl ?? fetch;
   const response = await fetchImpl(privacyRedactUrl(options?.baseUrl), {
@@ -263,7 +298,9 @@ async function callPrivacyFilter(
       "content-type": "application/json",
     },
     body: JSON.stringify({ model: "openai/privacy-filter", input: text }),
-    signal: AbortSignal.timeout(options?.timeoutMs ?? 8_000),
+    signal: options?.signal
+      ? AbortSignal.any([AbortSignal.timeout(options.timeoutMs ?? 8_000), options.signal])
+      : AbortSignal.timeout(options?.timeoutMs ?? 8_000),
   });
   const body = await response.text();
   if (response.status < 200 || response.status >= 300) {

@@ -192,6 +192,7 @@ describe("wallet proof helpers", () => {
     assert.equal(translate("bn", "connectOwner"), "মালিকের ওয়ালেট যুক্ত করুন");
     assert.equal(translate("en", "grantLocked"), "Connect the owner wallet or unlock Admin mode");
     assert.equal(isInsufficientBalance("Account bob.testnet does not have enough balance for the transaction"), true);
+    assert.equal(isInsufficientBalance("Insufficient balance."), true);
     assert.equal(isInsufficientBalance("The RPC timed out"), false);
     assert.equal(TESTNET_FAUCET_URL, "https://docs.near.org/getting-started/faucet");
     assert.equal(translate("en", "faucetLink"), "Get free testnet NEAR");

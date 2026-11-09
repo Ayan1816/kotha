@@ -133,7 +133,7 @@ export function displayNetworkName(reported: string | null | undefined, network 
 export const TESTNET_FAUCET_URL = "https://docs.near.org/getting-started/faucet";
 
 export function isInsufficientBalance(message: string): boolean {
-  return /does not have enough balance/i.test(message);
+  return /does not have enough balance|insufficient balance|পর্যাপ্ত ব্যালেন্স নেই/i.test(message);
 }
 
 export function networkBadgeLabel(network = publicNetwork()): string {

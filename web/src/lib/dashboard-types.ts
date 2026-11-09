@@ -16,7 +16,7 @@ export type ChatModelId = (typeof CHAT_MODELS)[number];
 export const INTENT_ACTIONS = ["swap", "transfer", "withdraw", "shield", "unshield"] as const;
 export type IntentAction = (typeof INTENT_ACTIONS)[number];
 
-export type PolicyStatus = "PASS" | "WARNING" | "BLOCKED";
+export type PolicyStatus = "PASS" | "WARNING" | "BLOCKED" | "NEEDS_WALLET" | "INSUFFICIENT_BALANCE";
 export type AttestationMode = "hardware-tee" | "unverified";
 
 export type TeeVerification = {
@@ -57,6 +57,9 @@ export type AegisIntent = {
 
 export type DryRunPreview = {
   allowed: boolean;
+  policyAllowed?: boolean;
+  balance?: "ok" | "skipped" | "insufficient";
+  checks?: Array<{ code: "perTx" | "daily" | "recipient" | "balance"; result: "PASS" | "FAIL" | "SKIPPED" }>;
   quote: {
     expectedAmountOut: string;
     rate: string;

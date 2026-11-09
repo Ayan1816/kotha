@@ -191,5 +191,36 @@ describe("NEAR AI privacy filter", () => {
     assert.match(result.redactedText, /alice\.testnet/);
     assert.equal(result.redactedText.includes("+14155550199"), false);
     assert.match(result.redactedText, /\[REDACTED_PHONE\]/);
+    assert.match(result.redactedText, /0\.01 NEAR/);
+  });
+
+  it("keeps token amounts and account ids when the filter glues redacted_pii onto NEAR", async () => {
+    const commands: Array<[string, string, string]> = [
+      ["Send 0.01 NEAR to alice.testnet", "0.01 NEAR", "alice.testnet"],
+      ["alice.testnet কে 0.01 NEAR পাঠাও", "0.01 NEAR", "alice.testnet"],
+      ["send 1 NEAR to bob.near", "1 NEAR", "bob.near"],
+      ["alice.testnet কে ০.০১ NEAR পাঠাও", "০.০১ NEAR", "alice.testnet"],
+    ];
+    for (const [command, amount, account] of commands) {
+      const fetchImpl: typeof fetch = async (_input, init) => {
+        const payload = JSON.parse(String(init?.body ?? "{}")) as { input?: string };
+        const input = payload.input ?? "";
+        assert.equal(input.includes(account), false, command);
+        assert.equal(input.includes(amount), false, command);
+        assert.equal(/\d(?:\.\d+)?\s*NEAR\b/i.test(input), false, command);
+        const glued = input.replace(/(?<=\d)\s*NEAR\b/gi, "redacted_pii_1");
+        return Response.json({ redacted_text: glued });
+      };
+      const result = await redactSensitiveText(command, { apiKey: "test-key", fetchImpl });
+      assert.equal(result.redactedText.includes(amount), true, command);
+      assert.equal(result.redactedText.includes(account), true, command);
+      assert.equal(result.redactedText.includes("redacted_pii"), false, command);
+    }
+
+    const mangling: typeof fetch = async () => Response.json({ redacted_text: "Send 0.01redacted_pii_1 to redacted_pii_2" });
+    const dropped = await redactSensitiveText("Send 0.01 NEAR to alice.testnet", { apiKey: "test-key", fetchImpl: mangling });
+    assert.match(dropped.redactedText, /0\.01 NEAR/);
+    assert.match(dropped.redactedText, /alice\.testnet/);
+    assert.equal(dropped.redactedText.includes("redacted_pii"), false);
   });
 });
