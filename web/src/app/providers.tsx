@@ -70,7 +70,6 @@ export function Providers({ children }: { children: ReactNode }) {
     }
   }, []);
 
-  const config = useMemo(() => ({ network }), [network]);
   const value = useMemo(
     () => ({ network, setNetwork, demoAccountId, setDemoAccountId, sessionOwnerOptIn, setSessionOwnerOptIn }),
     [network, setNetwork, demoAccountId, setDemoAccountId, sessionOwnerOptIn, setSessionOwnerOptIn],
@@ -78,7 +77,7 @@ export function Providers({ children }: { children: ReactNode }) {
 
   return (
     <KothaSessionContext.Provider value={value}>
-      <NearProvider key={network} config={config}>
+      <NearProvider key={network} config={{ network, autoConnect: true }}>
         {children}
       </NearProvider>
     </KothaSessionContext.Provider>

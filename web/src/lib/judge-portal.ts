@@ -53,7 +53,7 @@ export function buildLlmsTxt(): string {
     "- Methods: record_execution(execution: VerifiedExecution) and get_execution(correlation_id).",
     "- Owner actions require a NEP-413 signature. The server checks nonce length, proof age, owner id, RPC view_access_key_list, and nep413 verifyMessage.",
     `- Init policy limits: daily $${POLICY_DAILY_USD} (${POLICY_DAILY_CENTS} cents), per-transaction $${POLICY_PER_TX_USD} (${POLICY_PER_TX_CENTS} cents). Shield and unshield count toward the UTC-day spend.`,
-    "- Visitors may chat and dry-run. Execute, policy save, grant rotation, emergency freeze, and save_tx fail closed without the owner wallet.",
+    "- Chat, voice, dry-run, execute, policy save, grant rotation, revoke, and emergency freeze stay available with no wallet. Omitting the wallet object uses the server signer. A wallet object that is present still fails closed on a bad NEP-413 proof.",
     "",
     "### 2. Kotha TEE Enclave",
     `- Chat model: ${TEE_CHAT_MODEL}`,
@@ -65,8 +65,8 @@ export function buildLlmsTxt(): string {
     "",
     "### 3. Shakkhi On-Chain Audit Vault",
     "- record_execution and get_execution run on NEAR Testnet against the Prohori vault.",
-    "- NEAR Intents public and confidential dry-run and execution. dry_run is unsigned. Owner execution anchors with the wallet.",
-    "- Wallet-authenticated execute sets skipChain and uses callFunctionRaw with args { execution: VerifiedExecution }, gas 30000000000000, deposit 0.",
+    "- NEAR Intents public and confidential dry-run and execution. dry_run is unsigned. A missing wallet proof uses the server signer. A present proof is verified, then the wallet anchors.",
+    "- Wallet-authenticated execute sets skipChain and uses callFunctionRaw with args { execution: VerifiedExecution }, gas 30000000000000, deposit 0. Server-signer execute broadcasts with NEAR_ACCOUNT_ID and NEAR_PRIVATE_KEY when those are set.",
     "- Hash mapping: receipt hash is response_sha256, intent hash is request_sha256. Not a bare { receipt_hash }.",
     "- usd_amount_cents and timestamp_ns stay digit strings so values above 2^53 survive the wallet's JSON.parse. The Rust ABI is unchanged.",
     "",
@@ -176,7 +176,7 @@ export function buildOpenApiSpec() {
           operationId: "postIntents",
           summary: "Dry-run or owner-gated intent action",
           description:
-            "type is dry_run, execute, update_policy, rotate_grant, revoke_grant, emergency_freeze, or save_tx. dry_run is unsigned. Every other type requires a NEP-413 wallet proof and returns 401 owner_required, proof_expired, or proof_invalid when the proof fails. execute anchors with skipChain and does not broadcast from the server.",
+            "type is dry_run, execute, update_policy, rotate_grant, revoke_grant, emergency_freeze, or save_tx. dry_run is unsigned. Other types accept either a valid NEP-413 wallet proof or no wallet object (server signer / API-key mode, not a 401). A wallet object that fails verification returns 401 owner_required, proof_expired, or proof_invalid. Wallet execute anchors with skipChain. Server-signer execute broadcasts when NEAR_ACCOUNT_ID and NEAR_PRIVATE_KEY are set.",
           requestBody: {
             required: true,
             content: {
@@ -187,7 +187,7 @@ export function buildOpenApiSpec() {
                   properties: {
                     type: { type: "string" },
                     payload: { type: "object" },
-                    wallet: { type: "object", description: "NEP-413 owner proof. Omit for dry_run." },
+                    wallet: { type: "object", description: "NEP-413 proof. Omit for dry_run and for server-signer mode." },
                   },
                 },
               },

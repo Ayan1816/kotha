@@ -14,7 +14,7 @@ import {
 import { getVaultInfo, listExecutions, recordVerifiedExecution, type VerifiedExecution } from "@/lib/near-vault-rpc";
 import { anchorExecutionReceipt, overlayReceiptRows, saveReceiptTxHash } from "@/lib/receipt-service";
 import type { AegisIntent } from "@/lib/dashboard-types";
-import { DEMO_OWNER_ID, isPlausibleTxHash, requiresOwnerProof } from "@/lib/wallet-proof";
+import { DEFAULT_CONTRACT_ID, DEMO_OWNER_ID, isPlausibleTxHash, requiresOwnerProof, walletProofAttached } from "@/lib/wallet-proof";
 import { requireOwnerProof, WalletAuthError } from "@/lib/wallet-verify";
 
 export const runtime = "nodejs";
@@ -62,7 +62,8 @@ export async function POST(request: Request) {
     );
   }
   const payload = asRecord(record.payload) ?? {};
-  if (requiresOwnerProof(type)) {
+  const walletAttached = walletProofAttached(record.wallet);
+  if (requiresOwnerProof(type) && walletAttached) {
     try {
       await requireOwnerProof({ proof: record.wallet, action: type, payload });
     } catch (error) {
@@ -72,6 +73,7 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: { code: "proof_invalid", message: "Wallet proof was rejected." } }, { status: 401 });
     }
   }
+  const signerAccountId = walletAttached ? proofAccountId(record.wallet) : serverSignerAccount();
   try {
     if (type === "dry_run") {
       const preview = await runDryRunPreview(payload.intent);
@@ -96,8 +98,15 @@ export async function POST(request: Request) {
       }
       const execution = await executeIntentWithGrant(payload.intent, tee);
       const vault = await recordVerifiedExecution(toVaultRecord(execution));
-      const anchored = await anchorExecutionReceipt(execution, asIntent(payload.intent), { skipChain: true });
-      return NextResponse.json({ type, execution, vault: { ...vault, tx_hash: anchored.txHash, receipt_hash: anchored.receiptHash, chain_error: anchored.chainError } });
+      const anchored = await anchorExecutionReceipt(execution, asIntent(payload.intent), {
+        skipChain: walletAttached,
+        signerAccountId,
+      });
+      return NextResponse.json({
+        type,
+        execution: { ...execution, signer_account_id: signerAccountId },
+        vault: { ...vault, tx_hash: anchored.txHash, receipt_hash: anchored.receiptHash, chain_error: anchored.chainError },
+      });
     }
     if (type === "save_tx") {
       const id = typeof payload.id === "string" ? payload.id.trim() : "";
@@ -170,6 +179,15 @@ function errorResponse(error: unknown) {
   }
   const message = error instanceof Error ? error.message : "Unexpected error.";
   return NextResponse.json({ error: { code: "internal_error", message } }, { status: 500 });
+}
+
+function serverSignerAccount(): string {
+  return (
+    process.env.NEAR_ACCOUNT_ID?.trim() ||
+    process.env.NEXT_PUBLIC_CONTRACT_ID?.trim() ||
+    process.env.NEXT_PUBLIC_NEAR_CONTRACT_ID?.trim() ||
+    DEFAULT_CONTRACT_ID
+  );
 }
 
 function proofAccountId(value: unknown): string {

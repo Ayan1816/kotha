@@ -50,6 +50,29 @@ export async function fetchDashboard(): Promise<DashboardResponse> {
 }
 
 const NEAR_AI_STORAGE = "kotha-near-ai-key";
+const NEAR_AI_MAX = 500;
+
+export function readNearAiSessionKey(): string {
+  if (typeof window === "undefined") return "";
+  try {
+    return window.sessionStorage.getItem(NEAR_AI_STORAGE)?.trim() || "";
+  } catch {
+    return "";
+  }
+}
+
+export function saveNearAiSessionKey(value: string): boolean {
+  if (typeof window === "undefined") return false;
+  const trimmed = value.trim();
+  if (trimmed.length > NEAR_AI_MAX) return false;
+  try {
+    if (!trimmed) window.sessionStorage.removeItem(NEAR_AI_STORAGE);
+    else window.sessionStorage.setItem(NEAR_AI_STORAGE, trimmed);
+    return true;
+  } catch {
+    return false;
+  }
+}
 
 function withNearAiKey(headers: Record<string, string>): Record<string, string> {
   if (typeof window === "undefined") return headers;
@@ -135,15 +158,15 @@ function readTeeChat(data: unknown): TeeChatResponse {
   return data as TeeChatResponse;
 }
 
-export async function postPolicy(policy: PolicyPatch, wallet: WalletProofWire): Promise<PolicyUpdateResponse> {
+export async function postPolicy(policy: PolicyPatch, wallet?: WalletProofWire | null): Promise<PolicyUpdateResponse> {
   return postIntent<PolicyUpdateResponse>("update_policy", { policy }, wallet);
 }
 
-export async function postGrant(type: "rotate_grant" | "revoke_grant", wallet: WalletProofWire): Promise<GrantResponse> {
+export async function postGrant(type: "rotate_grant" | "revoke_grant", wallet?: WalletProofWire | null): Promise<GrantResponse> {
   return postIntent<GrantResponse>(type, {}, wallet);
 }
 
-export async function postFreeze(frozen: boolean, wallet: WalletProofWire): Promise<FreezeResponse> {
+export async function postFreeze(frozen: boolean, wallet?: WalletProofWire | null): Promise<FreezeResponse> {
   return postIntent<FreezeResponse>("emergency_freeze", { frozen }, wallet);
 }
 
@@ -154,12 +177,12 @@ export async function postDryRun(intent: unknown): Promise<DryRunResponse> {
 export async function postExecute(
   intent: unknown,
   teeAttestation: Record<string, string>,
-  wallet: WalletProofWire,
+  wallet?: WalletProofWire | null,
 ): Promise<ExecuteResponse> {
   return postIntent<ExecuteResponse>("execute", { intent, teeAttestation }, wallet);
 }
 
-export async function postSaveTx(id: string, txHash: string, wallet: WalletProofWire): Promise<{ type: "save_tx"; id: string; tx_hash: string }> {
+export async function postSaveTx(id: string, txHash: string, wallet?: WalletProofWire | null): Promise<{ type: "save_tx"; id: string; tx_hash: string }> {
   return postIntent("save_tx", { id, tx_hash: txHash }, wallet);
 }
 

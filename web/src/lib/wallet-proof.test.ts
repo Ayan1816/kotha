@@ -21,6 +21,7 @@ import {
   ownerActionsOpen,
   parseFrozenReceiptJson,
   requiresOwnerProof,
+  walletProofAttached,
   txHashFromOutcome,
   walletRecordCall,
   type FrozenChainReceipt,
@@ -99,6 +100,9 @@ describe("wallet proof helpers", () => {
     for (const action of ["execute", "update_policy", "rotate_grant", "revoke_grant", "emergency_freeze", "save_tx"]) {
       assert.equal(requiresOwnerProof(action), true);
     }
+    assert.equal(walletProofAttached(null), false);
+    assert.equal(walletProofAttached(undefined), false);
+    assert.equal(walletProofAttached({ accountId: "mohina.near" }), true);
   });
 
   it("rejects a stale timestamp, future skew, and a mismatched action or payload", () => {

@@ -2,6 +2,7 @@
 
 import { CopyButton } from "@/components/aegis/bits";
 import { translate, type Lang } from "@/components/aegis/copy";
+import { yoctoToNear } from "near-api-js";
 import { useNearWallet } from "near-connect-hooks";
 import { useEffect, useRef, useState } from "react";
 
@@ -13,14 +14,11 @@ function shortAccount(id: string): string {
 }
 
 function formatNear(yocto: bigint): string {
-  const scale = 10n ** 24n;
-  const whole = yocto / scale;
-  const frac = (yocto % scale).toString().padStart(24, "0").slice(0, 4).replace(/0+$/, "");
-  return frac ? `${whole.toString()}.${frac} NEAR` : `${whole.toString()} NEAR`;
+  return `${yoctoToNear(yocto, 4)} NEAR`;
 }
 
-export function WalletButton({ lang, network }: { lang: Lang; network: "mainnet" | "testnet" }) {
-  const { signedAccountId, signIn, signOut, loading, getBalance } = useNearWallet();
+export function WalletButton({ lang }: { lang: Lang }) {
+  const { loading, signedAccountId, signIn, signOut, getBalance, network } = useNearWallet();
   const [open, setOpen] = useState(false);
   const [balance, setBalance] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);

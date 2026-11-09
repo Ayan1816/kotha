@@ -68,6 +68,16 @@ const es: Overlay = {
   warning: "AVISO",
   blocked: "BLOQUEADO",
   risk: "Riesgo",
+  apiKeyTitle: "Clave de NEAR AI Cloud",
+  apiKeyServer: "La clave del servidor NEAR_AI_CLOUD_API_KEY está activa. Pega tu clave sk-... solo si esta sesión del navegador debe enviarla.",
+  apiKeySession: "Esta sesión del navegador envía tu clave de NEAR AI guardada.",
+  apiKeySave: "Guardar clave",
+  apiKeyClear: "Usar clave del servidor",
+  apiKeyTooLong: "Esa clave supera los 500 caracteres.",
+  welcomeTitle: "Habla o escribe un comando",
+  welcomeBody: "Elige un aviso o usa el micrófono. Kotha responde en lenguaje claro.",
+  serverSigned: "El firmante del servidor envió la ejecución.",
+  micLanguage: "Idioma del micrófono",
 };
 
 const ar: Overlay = {
@@ -138,6 +148,16 @@ const ar: Overlay = {
   warning: "تحذير",
   blocked: "محظور",
   risk: "الخطر",
+  apiKeyTitle: "مفتاح NEAR AI Cloud",
+  apiKeyServer: "مفتاح الخادم NEAR_AI_CLOUD_API_KEY نشط. الصق مفتاح sk-... فقط إذا كان على هذه الجلسة إرساله.",
+  apiKeySession: "جلسة المتصفح هذه ترسل مفتاح NEAR AI المحفوظ.",
+  apiKeySave: "حفظ المفتاح",
+  apiKeyClear: "استخدام مفتاح الخادم",
+  apiKeyTooLong: "هذا المفتاح أطول من 500 حرفاً.",
+  welcomeTitle: "تحدّث أو اكتب أمراً",
+  welcomeBody: "اختر طلباً أو استخدم الميكروفون. يجيب Kotha بلغة واضحة.",
+  serverSigned: "أرسل موقّع الخادم التنفيذ.",
+  micLanguage: "لغة الميكروفون",
 };
 
 const hi: Overlay = {
@@ -208,6 +228,16 @@ const hi: Overlay = {
   warning: "चेतावनी",
   blocked: "रोका गया",
   risk: "जोखिम",
+  apiKeyTitle: "NEAR AI Cloud कुंजी",
+  apiKeyServer: "सर्वर की NEAR_AI_CLOUD_API_KEY सक्रिय है। अपनी sk-... कुंजी केवल तभी चिपकाएँ जब यह ब्राउज़र सत्र उसे भेजे।",
+  apiKeySession: "यह ब्राउज़र सत्र आपकी सहेजी NEAR AI कुंजी भेज रहा है।",
+  apiKeySave: "कुंजी सहेजें",
+  apiKeyClear: "सर्वर कुंजी उपयोग करें",
+  apiKeyTooLong: "यह कुंजी 500 अक्षरों से लंबी है।",
+  welcomeTitle: "बोलें या आदेश लिखें",
+  welcomeBody: "एक प्रॉम्प्ट चुनें या माइक्रोफ़ोन उपयोग करें। Kotha सादी भाषा में जवाब देता है।",
+  serverSigned: "सर्वर हस्ताक्षरकर्ता ने निष्पादन भेजा।",
+  micLanguage: "माइक्रोफ़ोन भाषा",
 };
 
 const fr: Overlay = {
@@ -278,6 +308,16 @@ const fr: Overlay = {
   warning: "ALERTE",
   blocked: "BLOQUÉ",
   risk: "Risque",
+  apiKeyTitle: "Clé NEAR AI Cloud",
+  apiKeyServer: "La clé serveur NEAR_AI_CLOUD_API_KEY est active. Collez votre clé sk-... seulement si cette session doit l'envoyer.",
+  apiKeySession: "Cette session du navigateur envoie votre clé NEAR AI enregistrée.",
+  apiKeySave: "Enregistrer la clé",
+  apiKeyClear: "Utiliser la clé serveur",
+  apiKeyTooLong: "Cette clé dépasse 500 caractères.",
+  welcomeTitle: "Parlez ou saisissez une commande",
+  welcomeBody: "Choisissez une invite ou utilisez le micro. Kotha répond en langage clair.",
+  serverSigned: "Le signataire serveur a soumis l'exécution.",
+  micLanguage: "Langue du micro",
 };
 
 const zh: Overlay = {
@@ -348,6 +388,16 @@ const zh: Overlay = {
   warning: "警告",
   blocked: "已阻止",
   risk: "风险",
+  apiKeyTitle: "NEAR AI Cloud 密钥",
+  apiKeyServer: "服务器的 NEAR_AI_CLOUD_API_KEY 已启用。仅当此浏览器会话需要发送时，才粘贴你自己的 sk-... 密钥。",
+  apiKeySession: "此浏览器会话正在发送你保存的 NEAR AI 密钥。",
+  apiKeySave: "保存密钥",
+  apiKeyClear: "使用服务器密钥",
+  apiKeyTooLong: "该密钥超过 500 个字符。",
+  welcomeTitle: "说话或输入命令",
+  welcomeBody: "选择一个提示或使用麦克风。Kotha 用自然语言回答。",
+  serverSigned: "服务器签名者已提交执行。",
+  micLanguage: "麦克风语言",
 };
 
 export const localeOverlays: Record<string, Overlay | undefined> = { es, ar, hi, fr, zh };

@@ -38,9 +38,9 @@ export async function anchorExecutionReceipt(
     timestamp_ns: string;
   },
   intent: AegisIntent | null,
-  options?: { skipChain?: boolean },
+  options?: { skipChain?: boolean; signerAccountId?: string },
 ): Promise<{ receiptHash: string; txHash: string | null; chainError: string | null }> {
-  const body = await receiptBodyFromExecution(execution, intentView(intent, execution));
+  const body = await receiptBodyFromExecution(execution, intentView(intent, execution), options?.signerAccountId);
   const frozen = await buildFrozenReceipt(body);
   const saved = await putReceipt(execution.correlation_id, { bytes: frozen.bytes, tx_hash: null, chain_error: null });
   const storedHash = parseFrozenReceipt(saved.bytes)?.receipt_hash || frozen.receipt_hash;
@@ -147,9 +147,10 @@ async function receiptBodyFromExecution(
     timestamp_ns: string;
   },
   intent: IntentView,
+  signerAccountId = "",
 ): Promise<ReceiptBody> {
   const intent_hash = await sha256Hex(canonicalJson(intentDocument(intent)));
-  return {
+  const body: ReceiptBody = {
     action: execution.action_type,
     agent_id: execution.agent_id,
     amount_atomic: execution.amount_atomic,
@@ -166,6 +167,9 @@ async function receiptBodyFromExecution(
     timestamp_ns: execution.timestamp_ns,
     usd_amount_cents: execution.usd_amount_cents,
   };
+  const signer = signerAccountId.trim();
+  if (signer) body.signer_account_id = signer;
+  return body;
 }
 
 function intentView(

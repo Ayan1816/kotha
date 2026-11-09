@@ -59,7 +59,7 @@ const en = {
   mic: "Speak a prompt",
   micStop: "Stop listening",
   micMissing: "This browser has no Web Speech API. Type the prompt instead.",
-  voiceHint: "The microphone listens in the active language. If speech recognition returns nothing, the recording is transcribed.",
+  voiceHint: "The microphone types words into this box as you speak. A recording is uploaded only when this browser has no speech recognition.",
   listening: "Listening",
   risk: "Risk",
   pass: "PASS",
@@ -272,6 +272,17 @@ const en = {
   voiceFallback: "Cloud transcription was unavailable. Using the live transcript.",
   voiceUnavailable: "Transcription service is unavailable. Type your command instead.",
   goToGuard: "Go to Spending Guard",
+  apiKeyTitle: "NEAR AI Cloud API Key",
+  apiKeyServer: "The server NEAR_AI_CLOUD_API_KEY is active. Paste your own sk-... key only if this browser session should send it.",
+  apiKeySession: "This browser session is sending your saved NEAR AI key.",
+  apiKeySave: "Save key",
+  apiKeyClear: "Use server key",
+  apiKeyPlaceholder: "sk-...",
+  apiKeyTooLong: "That key is longer than 500 characters.",
+  welcomeTitle: "Speak or type a command",
+  welcomeBody: "Pick a prompt or use the microphone. Kotha answers in plain language.",
+  serverSigned: "Server signer submitted the execution.",
+  micLanguage: "Microphone language",
 } as const;
 
 export type CopyKey = keyof typeof en;
@@ -332,7 +343,7 @@ const bn: { [K in CopyKey]: string } = {
   mic: "প্রম্পট বলুন",
   micStop: "শোনা বন্ধ",
   micMissing: "এই ব্রাউজারে ওয়েব স্পিচ এপিআই নেই। প্রম্পট টাইপ করুন।",
-  voiceHint: "ওয়েব স্পিচ এপিআই bn-BD অথবা en-US-এ শোনে, openai/whisper-large-v3 ধাঁচে।",
+  voiceHint: "মাইক্রোফোন কথা বলার সাথে সাথে এই বাক্সে লেখে। ব্রাউজারে স্পিচ রিকগনিশন না থাকলে তবেই রেকর্ডিং আপলোড হয়।",
   listening: "শুনছি",
   risk: "ঝুঁকি",
   pass: "পাস",
@@ -545,6 +556,17 @@ const bn: { [K in CopyKey]: string } = {
   voiceFallback: "ক্লাউড ট্রান্সক্রিপশন নেই। লাইভ ট্রান্সক্রিপ্ট ব্যবহার করা হচ্ছে।",
   voiceUnavailable: "ট্রান্সক্রিপশন সেবা নেই। কমান্ড টাইপ করুন।",
   goToGuard: "খরচ প্রহরীতে যান",
+  apiKeyTitle: "NEAR AI Cloud API কী",
+  apiKeyServer: "সার্ভারের NEAR_AI_CLOUD_API_KEY সক্রিয়। নিজের sk-... কী শুধু এই ব্রাউজার সেশনে পাঠাতে চাইলে পেস্ট করুন।",
+  apiKeySession: "এই ব্রাউজার সেশন আপনার সেভ করা NEAR AI কী পাঠাচ্ছে।",
+  apiKeySave: "কী সংরক্ষণ",
+  apiKeyClear: "সার্ভার কী ব্যবহার করুন",
+  apiKeyPlaceholder: "sk-...",
+  apiKeyTooLong: "কী ৫০০ অক্ষরের বেশি।",
+  welcomeTitle: "কথা বলুন বা লিখুন",
+  welcomeBody: "একটি প্রম্পট বেছে নিন বা মাইক্রোফোন ব্যবহার করুন। কথা সহজ ভাষায় উত্তর দেয়।",
+  serverSigned: "সার্ভার সিগনার এক্সিকিউশন জমা দিয়েছে।",
+  micLanguage: "মাইক্রোফোনের ভাষা",
 };
 
 export function translate(lang: Lang, key: CopyKey): string {

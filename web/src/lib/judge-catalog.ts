@@ -99,7 +99,7 @@ export const PILLARS = [
       { id: "model", title: "Chat model", body: `Requests go to NEAR AI with model ${TEE_CHAT_MODEL} and stream: true. The route emits SSE steps redacting, thinking, verifying, and policy. A non-stream JSON completion is still accepted when the gateway returns JSON.` },
       { id: "signature", title: "Signature verification", body: "After the chat body returns, Kotha GETs /v1/signature/{chat_id} and /v1/attestation/report with the NEAR AI key. Verified requires ECDSA recovery of a report signing_address AND the hash inside the signed text equaling SHA-256 of the raw HTTP body." },
       { id: "honesty", title: "What stays unverified", body: "SSE is assembled only to read the chat id and the explanation. If the gateway signs different bytes than the raw body, status stays unverified and execute stays blocked. Kotha does not invent a TDX or NVIDIA quote and does not request a second non-stream completion to force a match." },
-      { id: "voice", title: "Voice fallback", body: `The microphone uses Web Speech (bn-BD or en-US) when the browser provides it. MediaRecorder plus POST /api/voice-transcribe runs only when speechCtor() is null. That route forwards audio to ${WHISPER_MODEL}. The transcript fills the box and does not auto-submit.` },
+      { id: "voice", title: "Voice fallback", body: `SpeechRecognition streams interim and final words into the chat input. getUserMedia is not called at the same time. MediaRecorder plus POST /api/voice-transcribe runs only when speechCtor() is null and forwards audio to ${WHISPER_MODEL}.` },
       { id: "pii", title: "Dual-layer PII redaction", body: `Local patterns cover Bangladesh mobiles (including Bengali digits), global E.164, email, NID, passport, bKash/Nagad, Luhn cards, and 12/24 BIP39 seeds. Tokens are [REDACTED_PHONE|EMAIL|ID|CARD|SEED]. When the key is set, a second POST uses ${PRIVACY_FILTER_MODEL}. Account ids and amounts stay visible.` },
     ],
   },
@@ -120,8 +120,8 @@ export const PILLARS = [
 export const SCOPE_ROWS = [
   {
     surface: "Wallet login",
-    live: "NEAR Connect on NEAR testnet. NEP-413 signatures are checked against RPC view_access_key_list (finality final) and near-api-js verifyMessage.",
-    boundary: "This deployment is testnet. The header badge is Testnet Demo. The word mainnet is not rendered. A mainnet explorer host is used only if NEXT_PUBLIC_NETWORK is mainnet.",
+    live: "NearProvider defaults to mainnet with autoConnect and no features filter. signIn() opens the NEAR Connect modal. NEP-413 signatures are checked against RPC view_access_key_list and near-api-js verifyMessage.",
+    boundary: "HOT Wallet, Meteor, Intear, Nightly, and MyNearWallet stay available. A .near account uses https://rpc.mainnet.near.org. A .testnet account uses the testnet RPC.",
   },
   {
     surface: "TEE chat",
@@ -130,8 +130,8 @@ export const SCOPE_ROWS = [
   },
   {
     surface: "Voice",
-    live: "Web Speech (bn-BD / en-US) runs in the browser. When speechCtor() is null, audio is posted to /api/voice-transcribe and forwarded to openai/whisper-large-v3.",
-    boundary: "Whisper is the fallback, not the primary mic path. A speech recognition error does not switch to the recorder. Missing API key returns 503. Transcripts are not auto-submitted.",
+    live: "SpeechRecognition (en-US, bn-BD, es-ES, ar-SA, hi-IN, fr-FR, zh-CN) streams into the chat input. When speechCtor() is null, audio is posted to /api/voice-transcribe and forwarded to openai/whisper-large-v3.",
+    boundary: "getUserMedia is never started beside SpeechRecognition. A recognition error does not switch to the recorder. A missing API key returns 200 JSON with fallback true.",
   },
   {
     surface: "Dry-run",
@@ -140,13 +140,13 @@ export const SCOPE_ROWS = [
   },
   {
     surface: "Owner actions",
-    live: "execute, update_policy, rotate_grant, revoke_grant, emergency_freeze, and save_tx require a fresh owner NEP-413 proof.",
-    boundary: "They fail closed when the owner id is empty or the proof is missing, expired, replayed, or signed by another account. The judge explorer's execute button sends an empty payload and expects 401 owner_required before any chain write.",
+    live: "execute, update_policy, rotate_grant, revoke_grant, emergency_freeze, and save_tx accept a fresh NEP-413 proof or no wallet object.",
+    boundary: "A missing wallet object is server-signer mode and does not return 401. A proof that is present still fails closed when it is expired or signed by another account without sessionOwner. An empty execute intent returns 400 invalid_intent and does not write the chain.",
   },
   {
     surface: "On-chain anchor",
-    live: "The connected owner wallet calls record_execution on the testnet vault and then save_tx stores the transaction hash next to the frozen receipt.",
-    boundary: "Wallet-authenticated execute uses skipChain: true and callFunctionRaw, not callFunction. Args are { execution: VerifiedExecution }. Gas 30000000000000. Deposit 0. Receipt hash maps to response_sha256 and intent hash maps to request_sha256. The server's unquoted-digit splice in recordExecutionArgs is not used on this path. Rust ABI is unchanged. timestamp_ns stays a digit string.",
+    live: "A connected wallet calls record_execution and the receipt stores signedAccountId. With no wallet, the server signer broadcasts when NEAR_ACCOUNT_ID and NEAR_PRIVATE_KEY are set.",
+    boundary: "Wallet-authenticated execute uses skipChain: true and callFunctionRaw, not callFunction. Args are { execution: VerifiedExecution }. Gas 30000000000000. Deposit 0. Receipt hash maps to response_sha256 and intent hash maps to request_sha256. The server signer writes unquoted digits. Rust ABI is unchanged. timestamp_ns stays a digit string.",
   },
   {
     surface: "Audit statement",
@@ -291,7 +291,7 @@ export const LIVE_CALLS = [
     method: "POST" as const,
     path: "/api/intents",
     title: "Execute without a proof",
-    detail: "Empty execute payload. Expect 401 owner_required before any chain write. This button does not attach a wallet proof.",
+    detail: "Empty execute payload and no wallet proof. Server-signer mode does not return 401. Expect 400 invalid_intent and no chain write.",
     body: '{"type":"execute","payload":{}}',
     form: false,
     curl: `curl -sS -D - -X POST ${ORIGIN}/api/intents -H 'content-type: application/json' -d '{"type":"execute","payload":{}}'`,

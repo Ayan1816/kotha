@@ -1,6 +1,7 @@
 "use client";
 
 import { useKothaSession } from "@/app/providers";
+import { ApiKeyCard } from "@/components/aegis/api-key-card";
 import { DeckRequestError, fetchDashboard, fetchTeeCatalog, postDryRun, postExecute, postFreeze, postGrant, postPolicy, postSaveTx, postTeeChatStream } from "@/components/aegis/api";
 import type { ChainLink } from "@/components/aegis/audit-panel";
 import { CopilotPanel, type ChatMessage } from "@/components/aegis/copilot-panel";
@@ -76,7 +77,8 @@ export function CommandDeck() {
   const session = useKothaSession();
 
   const frozen = dashboard?.agentState.frozen ?? dashboard?.agentState.policy.frozen ?? false;
-  const ownerLock = connectedMayAct(near.signedAccountId || "") ? null : translate(lang, "connectOwner");
+  const accountId = (near.signedAccountId || "").trim();
+  const ownerLock = accountId && !connectedMayAct(accountId) ? translate(lang, "connectOwner") : null;
   const thinking = busy === "chat";
 
   useEffect(() => {
@@ -228,7 +230,8 @@ export function CommandDeck() {
   }
 
   async function ownerProof(action: string, payload: Record<string, unknown>) {
-    const account = near.signedAccountId || "";
+    const account = (near.signedAccountId || "").trim();
+    if (!account) return null;
     if (!connectedMayAct(account)) throw new Error(translate(lang, "connectOwner"));
     const sessionOwner = proofUsesSessionOwner(account, { sessionOwnerOptIn: !strictOwnerMode() });
     return createWalletProof((params) => near.signNEP413Message(params), action, payload, Date.now(), sessionOwner);
@@ -313,7 +316,8 @@ export function CommandDeck() {
   async function execute() {
     if (!quote) return;
     try {
-      if (!connectedMayAct(near.signedAccountId || "")) {
+      const account = (near.signedAccountId || "").trim();
+      if (account && !connectedMayAct(account)) {
         setNotice(translate(lang, "connectOwner"));
         return;
       }
@@ -335,6 +339,18 @@ export function CommandDeck() {
       setQuote((current) => (current ? { ...current, execution: result.execution, dryRun: result.execution.preview } : current));
       if (result.simulated || result.execution.remote_status === "simulated-demo") {
         setNotice(translate(lang, "demoSimulated"));
+        await refresh();
+        return;
+      }
+      if (!account) {
+        setNotice(result.vault.chain_error || translate(lang, "serverSigned"));
+        if (result.vault.tx_hash || result.vault.receipt_hash) {
+          setLatestChain({
+            id: result.execution.correlation_id,
+            hash: result.vault.tx_hash || "",
+            receiptHash: result.vault.receipt_hash || "",
+          });
+        }
         await refresh();
         return;
       }
@@ -470,7 +486,7 @@ export function CommandDeck() {
               setTab("guard");
               void refreshQuote();
             }}
-            onOpenGuard={() => setTab("guard")}
+            onExecute={() => void execute()}
           />
         ) : null}
         {dashboard && tab === "guard" ? (
@@ -504,6 +520,7 @@ export function CommandDeck() {
         ) : null}
         {dashboard && tab === "settings" ? (
           <div className="space-y-4">
+            <ApiKeyCard lang={lang} />
             <PolicyPanel
               lang={lang}
               policy={dashboard.agentState.policy}

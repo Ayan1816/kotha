@@ -31,7 +31,7 @@ export function TelemetryBar({ lang, onLang }: { lang: Lang; onLang: (lang: Lang
       <div className="flex shrink-0 items-center gap-1 sm:gap-2">
         <NetworkToggle lang={lang} network={network} onNetwork={setNetwork} />
         <LanguageMenu lang={lang} onLang={onLang} />
-        <WalletButton lang={lang} network={network} />
+        <WalletButton lang={lang} />
       </div>
     </header>
   );

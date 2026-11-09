@@ -58,7 +58,7 @@ export function CopilotPanel({
   onAutoRedact,
   onSend,
   onDryRun,
-  onOpenGuard,
+  onExecute,
 }: {
   lang: Lang;
   model: ChatModelId;
@@ -73,12 +73,13 @@ export function CopilotPanel({
   onAutoRedact: (next: boolean) => void;
   onSend: (text: string) => void;
   onDryRun?: () => void;
-  onOpenGuard?: () => void;
+  onExecute?: () => void;
 }) {
   const [input, setInput] = useState("");
   const [listening, setListening] = useState(false);
   const [demoWave, setDemoWave] = useState(false);
   const [voiceNote, setVoiceNote] = useState<string | null>(null);
+  const [micLang, setMicLang] = useState<Lang>(lang);
   const scroller = useRef<HTMLDivElement>(null);
   const session = useRef<SpeechSession | null>(null);
   const recorder = useRef<MediaRecorder | null>(null);
@@ -88,8 +89,12 @@ export function CopilotPanel({
   const hintRef = useRef("");
   const settled = useRef(false);
   const captureGen = useRef(0);
+  const listeningRef = useRef(false);
+  const micPinned = useRef(false);
+  const micLangRef = useRef(lang);
   const langRef = useRef(lang);
   langRef.current = lang;
+  micLangRef.current = micLang;
   const [uploading, setUploading] = useState(false);
   const demoTimer = useRef<number | null>(null);
   const thinkingRef = useRef(thinking);
@@ -104,9 +109,19 @@ export function CopilotPanel({
   }, [messages, thinking, liveText, chatStep]);
 
   useEffect(() => {
+    if (!micPinned.current) setMicLang(lang);
+  }, [lang]);
+
+  useEffect(() => {
     return () => {
       discardRecording.current = true;
-      session.current?.stop();
+      listeningRef.current = false;
+      captureGen.current += 1;
+      try {
+        session.current?.stop();
+      } catch {
+        // Recognition may already be stopped.
+      }
       if (recorder.current && recorder.current.state !== "inactive") recorder.current.stop();
       if (demoTimer.current != null) window.clearTimeout(demoTimer.current);
     };
@@ -119,133 +134,153 @@ export function CopilotPanel({
     onSendRef.current(message);
   }
 
-  function capturedSpeech(): string {
+  function liveTranscript(): string {
     return (speechText.current || hintRef.current).trim();
-  }
-
-  async function finishCapture(blob: Blob | null) {
-    if (settled.current || discardRecording.current) return;
-    const text = capturedSpeech();
-    if (text) {
-      settled.current = true;
-      setListening(false);
-      setInput(text);
-      setVoiceNote(null);
-      submit(text);
-      return;
-    }
-    if (blob && blob.size > 0) {
-      settled.current = true;
-      setListening(false);
-      await uploadVoice(blob, hintRef.current);
-      return;
-    }
-    if (recorder.current && recorder.current.state !== "inactive") return;
-    settled.current = true;
-    setListening(false);
-    setVoiceNote(translate(langRef.current, "voiceUnavailable"));
   }
 
   function stopCapture() {
     captureGen.current += 1;
+    listeningRef.current = false;
+    setListening(false);
     try {
       session.current?.stop();
     } catch {
       // Recognition may already be stopped.
     }
+    session.current = null;
     const rec = recorder.current;
     if (rec && rec.state !== "inactive") {
       rec.stop();
       return;
     }
-    void finishCapture(null);
+    const text = liveTranscript();
+    speechText.current = "";
+    hintRef.current = "";
+    if (text) {
+      setInput(text);
+      setVoiceNote(null);
+      submit(text);
+    }
   }
 
-  async function toggleMic() {
-    if (uploading) return;
-    if (listening) {
-      stopCapture();
-      return;
+  function startRecognition(ctor: new () => SpeechSession) {
+    const gen = ++captureGen.current;
+    settled.current = false;
+    speechText.current = "";
+    hintRef.current = "";
+    listeningRef.current = true;
+    setListening(true);
+    setVoiceNote(translate(langRef.current, "tapStopSend"));
+    const recognition = new ctor();
+    recognition.lang = SPEECH_LANG[micLangRef.current];
+    recognition.continuous = true;
+    recognition.interimResults = true;
+    recognition.onresult = (event) => {
+      let finalText = "";
+      let interim = "";
+      for (let index = 0; index < event.results.length; index += 1) {
+        const result = event.results[index];
+        const piece = result?.[0]?.transcript ?? "";
+        if (result?.isFinal) finalText += piece;
+        else interim += piece;
+      }
+      const live = `${finalText}${interim}`.trim();
+      if (finalText.trim()) speechText.current = finalText.trim();
+      hintRef.current = live;
+      if (live) setInput(live);
+    };
+    recognition.onerror = () => {
+      if (settled.current || captureGen.current !== gen) return;
+      settled.current = true;
+      listeningRef.current = false;
+      setListening(false);
+      setVoiceNote(translate(langRef.current, "voiceUnavailable"));
+    };
+    recognition.onend = () => {
+      if (settled.current || captureGen.current !== gen || !listeningRef.current) return;
+      recognition.lang = SPEECH_LANG[micLangRef.current];
+      try {
+        recognition.start();
+      } catch {
+        // The browser can reject a restart that overlaps the previous session.
+      }
+    };
+    session.current = recognition;
+    try {
+      recognition.start();
+    } catch {
+      session.current = null;
+      listeningRef.current = false;
+      setListening(false);
+      setVoiceNote(translate(langRef.current, "micMissing"));
     }
+  }
+
+  async function startRecorderFallback() {
     const gen = ++captureGen.current;
     settled.current = false;
     speechText.current = "";
     hintRef.current = "";
     recordChunks.current = [];
-    setVoiceNote(translate(lang, "tapStopSend"));
+    if (typeof MediaRecorder === "undefined" || !navigator.mediaDevices?.getUserMedia) {
+      setVoiceNote(translate(langRef.current, "micMissing"));
+      return;
+    }
+    listeningRef.current = true;
     setListening(true);
-    const ctor = speechCtor();
-    if (ctor) {
-      const recognition = new ctor();
-      recognition.lang = SPEECH_LANG[lang];
-      recognition.continuous = true;
-      recognition.interimResults = true;
-      recognition.onresult = (event) => {
-        let finalText = "";
-        let interim = "";
-        for (let index = 0; index < event.results.length; index += 1) {
-          const result = event.results[index];
-          const piece = result?.[0]?.transcript ?? "";
-          if (result?.isFinal) finalText += piece;
-          else interim += piece;
-        }
-        const live = `${finalText}${interim}`.trim();
-        if (finalText.trim()) speechText.current = finalText.trim();
-        hintRef.current = live;
-        if (live) setInput(live);
-      };
-      recognition.onerror = () => {
-        // Mobile Chromium can error without a transcript. The recorder still uploads.
-      };
-      recognition.onend = () => {
-        if (settled.current || captureGen.current !== gen) return;
-        if (!capturedSpeech()) return;
-        const rec = recorder.current;
-        if (rec && rec.state !== "inactive") {
-          rec.stop();
-          return;
-        }
-        void finishCapture(null);
-      };
-      session.current = recognition;
-      try {
-        recognition.start();
-      } catch {
-        session.current = null;
-      }
-    }
-    let recorderStarted = false;
+    setVoiceNote(translate(langRef.current, "micUpload"));
     try {
-      if (typeof MediaRecorder !== "undefined" && navigator.mediaDevices?.getUserMedia) {
-        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        if (captureGen.current !== gen || settled.current) {
-          stream.getTracks().forEach((track) => track.stop());
-          return;
-        }
-        const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((item) => MediaRecorder.isTypeSupported(item)) || "";
-        const rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
-        recordChunks.current = [];
-        rec.ondataavailable = (event) => {
-          if (event.data.size > 0) recordChunks.current.push(event.data);
-        };
-        rec.onstop = () => {
-          stream.getTracks().forEach((track) => track.stop());
-          if (discardRecording.current) return;
-          const blob = new Blob(recordChunks.current, { type: rec.mimeType || "audio/webm" });
-          void finishCapture(blob);
-        };
-        recorder.current = rec;
-        rec.start();
-        recorderStarted = true;
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      if (captureGen.current !== gen || discardRecording.current) {
+        stream.getTracks().forEach((track) => track.stop());
+        return;
       }
+      const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find((item) => MediaRecorder.isTypeSupported(item)) || "";
+      const rec = mime ? new MediaRecorder(stream, { mimeType: mime }) : new MediaRecorder(stream);
+      rec.ondataavailable = (event) => {
+        if (event.data.size > 0) recordChunks.current.push(event.data);
+      };
+      rec.onstop = () => {
+        stream.getTracks().forEach((track) => track.stop());
+        listeningRef.current = false;
+        setListening(false);
+        if (discardRecording.current || settled.current) return;
+        settled.current = true;
+        const blob = new Blob(recordChunks.current, { type: rec.mimeType || "audio/webm" });
+        if (blob.size > 0) void uploadVoice(blob, hintRef.current);
+        else setVoiceNote(translate(langRef.current, "voiceUnavailable"));
+      };
+      recorder.current = rec;
+      rec.start();
     } catch {
-      recorderStarted = false;
-    }
-    if (!recorderStarted && !session.current) {
-      settled.current = true;
+      listeningRef.current = false;
       setListening(false);
       setVoiceNote(translate(langRef.current, "micMissing"));
     }
+  }
+
+  function toggleMic() {
+    if (uploading) return;
+    if (listeningRef.current) {
+      stopCapture();
+      return;
+    }
+    const ctor = speechCtor();
+    if (ctor) {
+      startRecognition(ctor);
+      return;
+    }
+    void startRecorderFallback();
+  }
+
+  function cycleMicLanguage() {
+    const order: Lang[] = ["en", "bn"];
+    if (lang !== "en" && lang !== "bn") order.push(lang);
+    const index = order.indexOf(micLangRef.current);
+    const next = order[(index + 1) % order.length] ?? "en";
+    micPinned.current = true;
+    micLangRef.current = next;
+    setMicLang(next);
   }
 
   async function uploadVoice(blob: Blob, hint: string) {
@@ -295,19 +330,6 @@ export function CopilotPanel({
           {teeLabel}
         </span>
       </div>
-      <div className="flex gap-2 overflow-x-auto pb-1">
-        {CHIPS.map((key) => (
-          <button
-            key={key}
-            type="button"
-            disabled={thinking}
-            onClick={() => submit(translate(lang, key))}
-            className="shrink-0 rounded-full border border-white/10 bg-black/25 px-3 py-2 text-left text-sm text-white hover:border-[#00EC97]/40 disabled:opacity-50"
-          >
-            {translate(lang, key)}
-          </button>
-        ))}
-      </div>
       <SpotlightGlassCard alert={frozen} className="flex min-h-0 flex-1 flex-col">
       <div className="flex h-full min-h-[calc(100dvh-14rem)] flex-col">
         <details className="border-b border-white/10 px-4 py-3">
@@ -338,6 +360,25 @@ export function CopilotPanel({
         </details>
 
         <div ref={scroller} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4" aria-live="polite">
+          {messages.length === 0 && !thinking ? (
+            <div className="mx-auto max-w-lg rounded-2xl border border-white/10 bg-black/30 p-4">
+              <h2 className="text-base font-semibold text-white">{translate(lang, "welcomeTitle")}</h2>
+              <p className="mt-1 text-sm leading-6 text-white/65">{translate(lang, "welcomeBody")}</p>
+              <div className="mt-3 flex flex-col gap-2">
+                {CHIPS.map((key) => (
+                  <button
+                    key={key}
+                    type="button"
+                    disabled={thinking}
+                    onClick={() => submit(translate(lang, key))}
+                    className="rounded-xl border border-white/10 bg-black/25 px-3 py-2 text-left text-sm text-white hover:border-[#00EC97]/40 disabled:opacity-50"
+                  >
+                    {translate(lang, key)}
+                  </button>
+                ))}
+              </div>
+            </div>
+          ) : null}
           {messages.map((message) =>
             message.role === "user" ? (
               <div key={message.id} className="ml-8 rounded-2xl rounded-br-md border border-[#00D2FF]/25 bg-[#00D2FF]/8 px-3 py-2 text-sm text-white">
@@ -345,7 +386,7 @@ export function CopilotPanel({
                 {message.text}
               </div>
             ) : (
-              <AssistantBubble key={message.id} lang={lang} message={message} baseUrl={baseUrl} onDryRun={onDryRun} onOpenGuard={onOpenGuard} />
+              <AssistantBubble key={message.id} lang={lang} message={message} baseUrl={baseUrl} onDryRun={onDryRun} onExecute={onExecute} />
             ),
           )}
           {thinking ? (
@@ -372,6 +413,15 @@ export function CopilotPanel({
           }}
         >
           <div className="flex items-end gap-2">
+            <button
+              type="button"
+              aria-label={translate(lang, "micLanguage")}
+              title={translate(lang, "micLanguage")}
+              onClick={cycleMicLanguage}
+              className="inline-flex h-11 shrink-0 items-center rounded-xl border border-white/10 px-2 text-xs font-semibold text-white"
+            >
+              {micLangLabel(micLang)}
+            </button>
             <button
               type="button"
               title={translate(lang, "voiceHint")}
@@ -423,13 +473,13 @@ function AssistantBubble({
   message,
   baseUrl,
   onDryRun,
-  onOpenGuard,
+  onExecute,
 }: {
   lang: Lang;
   message: ChatMessage;
   baseUrl: string;
   onDryRun?: () => void;
-  onOpenGuard?: () => void;
+  onExecute?: () => void;
 }) {
   const attestation = message.attestation;
   if (!attestation) {
@@ -479,7 +529,7 @@ function AssistantBubble({
         </span>
       </div>
       <p className="text-sm leading-relaxed text-white/90">{displayReply(decision.explanation)}</p>
-      <ActionCard lang={lang} intentAmount={decision.intent?.amount} fallbackText={decision.explanation} onDryRun={onDryRun} onOpenGuard={onOpenGuard} />
+      <ActionCard lang={lang} intentAmount={decision.intent?.amount} fallbackText={decision.explanation} onDryRun={onDryRun} onExecute={onExecute} />
       <details className="mt-3 rounded-xl border border-[#00EC97]/20 bg-[#00EC97]/5 px-3 py-2">
         <summary className="cursor-pointer text-sm font-medium text-[#b8ffe0]">{translate(lang, "showDetails")}</summary>
         <div className="mt-2">
@@ -524,13 +574,13 @@ function ActionCard({
   intentAmount,
   fallbackText,
   onDryRun,
-  onOpenGuard,
+  onExecute,
 }: {
   lang: Lang;
   intentAmount?: string;
   fallbackText: string;
   onDryRun?: () => void;
-  onOpenGuard?: () => void;
+  onExecute?: () => void;
 }) {
   const numeric = Number(intentAmount);
   const fromIntent = Number.isFinite(numeric) && numeric > 0;
@@ -542,12 +592,18 @@ function ActionCard({
         <button type="button" onClick={onDryRun} className="h-9 rounded-xl border border-white/15 px-3 text-sm text-white">
           {translate(lang, "dryRun")}
         </button>
-        <button type="button" onClick={onOpenGuard} className="h-9 rounded-xl bg-[#00EC97] px-3 text-sm font-semibold text-[#04140d]">
-          {translate(lang, "goToGuard")}
+        <button type="button" onClick={onExecute} className="h-9 rounded-xl bg-[#00EC97] px-3 text-sm font-semibold text-[#04140d]">
+          {translate(lang, "executeButton")}
         </button>
       </div>
     </div>
   );
+}
+
+function micLangLabel(code: Lang): string {
+  if (code === "en") return "EN";
+  if (code === "bn") return "বাংলা";
+  return code.toUpperCase();
 }
 
 function Badge({ children, className, title }: { children: ReactNode; className: string; title?: string }) {

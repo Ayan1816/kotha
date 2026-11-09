@@ -117,6 +117,11 @@ export function requiresOwnerProof(type: string): boolean {
   return (OWNER_ACTIONS as readonly string[]).includes(type);
 }
 
+/** True when the client attached a wallet object. A missing proof is server-signer mode, not a 401. */
+export function walletProofAttached(value: unknown): boolean {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
 export function displayNetworkName(reported: string | null | undefined, network = publicNetwork()): string {
   if (network !== "mainnet") return "testnet";
   const name = (reported || "").trim().toLowerCase();

@@ -14,6 +14,7 @@ export type ReceiptBody = {
   signing_address: string;
   timestamp_ns: string;
   usd_amount_cents: string;
+  signer_account_id?: string;
 };
 
 export type ChainExecutionView = {
