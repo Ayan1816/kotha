@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { limitAiRequest } from "@/lib/ai-rate-limit";
 import { activeChatModel, nearAiApiKey, nearAiBaseUrl } from "@/lib/near-ai-tee";
-import { translateMany, translateText } from "@/lib/translate-text";
+import { serveTranslation, serveTranslations } from "@/lib/translate-text";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,7 +19,7 @@ export async function POST(request: Request) {
   const record = asRecord(body);
   const text = typeof record.text === "string" ? record.text.trim() : "";
   const texts = readTexts(record);
-  const target = record.target === "bn" || record.target === "en" ? record.target : "";
+  const target = readTarget(record.target);
   if ((!text && !texts) || !target) {
     return NextResponse.json({ error: { code: "text_required", message: "text and target are required." } }, { status: 400 });
   }
@@ -37,29 +37,17 @@ export async function POST(request: Request) {
   if (!apiKey) {
     return NextResponse.json({ error: { code: "unconfigured", message: "NEAR_AI_CLOUD_API_KEY is not set." } }, { status: 503 });
   }
-  try {
-    if (texts) {
-      const translated = await translateMany({
-        texts,
-        target,
-        apiKey,
-        model: activeChatModel(),
-        baseUrl: nearAiBaseUrl(),
-      });
-      return NextResponse.json({ texts: translated });
-    }
-    const translated = await translateText({
-      text,
-      target,
-      apiKey,
-      model: activeChatModel(),
-      baseUrl: nearAiBaseUrl(),
-    });
-    return NextResponse.json({ text: translated });
-  } catch (error) {
-    const message = error instanceof Error && error.message ? error.message : "Translation failed.";
-    return NextResponse.json({ error: { code: "translate_failed", message } }, { status: 502 });
+  const shared = { target, apiKey, model: activeChatModel(), baseUrl: nearAiBaseUrl() };
+  if (texts) {
+    const served = await serveTranslations({ ...shared, texts });
+    return NextResponse.json(served);
   }
+  const served = await serveTranslation({ ...shared, text });
+  return NextResponse.json(served);
+}
+
+function readTarget(value: unknown): "bn" | "en" | "" {
+  return value === "bn" || value === "en" ? value : "";
 }
 
 function callerKey(request: Request): string | null {

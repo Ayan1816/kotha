@@ -6,6 +6,7 @@ const TRANSLATE_ATTEMPTS = 3;
 
 const successCache = new Map<string, string>();
 const inflight = new Map<string, Promise<string>>();
+const fellBack = new Map<string, boolean>();
 
 export function translateSystemPrompt(target: "bn" | "en"): string {
   const language = target === "bn" ? "Bengali" : "English";
@@ -28,6 +29,10 @@ type TranslateArgs = {
 
 function cacheKey(target: string, text: string): string {
   return `${target}\n${text}`;
+}
+
+export function translationFellBack(target: string, text: string): boolean {
+  return fellBack.get(cacheKey(target, text)) === true;
 }
 
 function defaultWait(ms: number): Promise<void> {
@@ -94,6 +99,7 @@ async function runTranslate(args: TranslateArgs, key: string): Promise<string> {
         continue;
       }
       successCache.set(key, translated);
+      fellBack.set(key, false);
       return translated;
     } catch (error) {
       const name = error instanceof Error ? error.name : "";
@@ -103,8 +109,35 @@ async function runTranslate(args: TranslateArgs, key: string): Promise<string> {
     }
   }
   const cached = successCache.get(key);
-  if (cached) return cached;
+  if (cached) {
+    fellBack.set(key, true);
+    return cached;
+  }
   throw new Error(lastError);
+}
+
+export async function serveTranslation(args: TranslateArgs): Promise<{ text: string; fallback: boolean }> {
+  try {
+    const text = await translateText(args);
+    return { text, fallback: translationFellBack(args.target, args.text) };
+  } catch (error) {
+    const message = error instanceof Error && error.message ? error.message : "Translation failed.";
+    console.error(`[translate] upstream failed: ${message}`);
+    return { text: args.text, fallback: true };
+  }
+}
+
+export async function serveTranslations(
+  args: Omit<TranslateArgs, "text"> & { texts: string[] },
+): Promise<{ texts: string[]; fallback: boolean }> {
+  try {
+    const texts = await translateMany(args);
+    return { texts, fallback: args.texts.some((text) => translationFellBack(args.target, text)) };
+  } catch (error) {
+    const message = error instanceof Error && error.message ? error.message : "Translation failed.";
+    console.error(`[translate] upstream failed: ${message}`);
+    return { texts: args.texts, fallback: true };
+  }
 }
 
 /** One chat completion for several strings. Identical lines share one result. */

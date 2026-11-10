@@ -1,15 +1,17 @@
 "use client";
 
+import { DryRunSummary } from "@/components/aegis/audit-panel";
 import { CopyButton, HashRow } from "@/components/aegis/bits";
-import { translate, type CopyKey, type Lang } from "@/components/aegis/copy";
-import { attestationCurl, signatureCurl } from "@/components/aegis/format";
+import { fillCopy, translate, type CopyKey, type Lang } from "@/components/aegis/copy";
+import { actionCopyKey, actionTone, attestationCurl, isNativeNearTransfer, previewSymbol, showSlippageRow, showWnearLine, signatureCurl } from "@/components/aegis/format";
 import { displayReply, LOADER_STEPS, readActionCard, type LoaderStep } from "@/lib/chat-stream";
+import { isLocalPreview } from "@/lib/tee-status";
 import { recordedBlobToWav, voiceExceedsLimit } from "@/lib/wav";
 import { cn } from "@/lib/utils";
 import { EnclaveSwitch, SignatureTamperLab, SpotlightGlassCard, VoiceWaveform } from "@/components/ui/aegis-primitives";
-import type { AttestedInference, ChatModelId, DryRunPreview, PolicyStatus } from "@/lib/dashboard-types";
+import type { AegisIntent, AttestedInference, ChatModelId, DryRunPreview, PolicyStatus } from "@/lib/dashboard-types";
 import { TESTNET_FAUCET_URL } from "@/lib/wallet-proof";
-import { Mic, MicOff, Send, Shield } from "lucide-react";
+import { Info, Mic, MicOff, Send, Shield } from "lucide-react";
 import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 const CHIPS = ["chipSwap", "chipRemit", "chipShield", "chipSecurity"] as const;
@@ -42,6 +44,7 @@ export type ChatMessage = {
   errorCode?: string;
   attestation?: AttestedInference;
   dryRun?: DryRunPreview | null;
+  dryRunShown?: boolean;
 };
 
 export function CopilotPanel({
@@ -64,6 +67,7 @@ export function CopilotPanel({
   onRetry,
   onRetryTranslate,
   onDryRun,
+  onOpenGuard,
   onExecute,
 }: {
   lang: Lang;
@@ -75,7 +79,7 @@ export function CopilotPanel({
   liveText: string;
   autoRedact: boolean;
   frozen: boolean;
-  teePhase?: "idle" | "unverified" | "verified";
+  teePhase?: "idle" | "local" | "unverified" | "verified";
   accountId?: string;
   ownerReady?: boolean;
   walletConnected?: boolean;
@@ -84,8 +88,9 @@ export function CopilotPanel({
   onSend: (text: string, chipKey?: string) => void;
   onRetry?: (id: string) => void;
   onRetryTranslate?: (id: string) => void;
-  onDryRun?: () => void;
-  onExecute?: () => void;
+  onDryRun?: (intentId: string) => void;
+  onOpenGuard?: (intentId: string) => void;
+  onExecute?: (intentId: string) => void;
 }) {
   const [input, setInput] = useState("");
   const [listening, setListening] = useState(false);
@@ -351,9 +356,19 @@ export function CopilotPanel({
   }
 
   const teeLabel =
-    teePhase === "verified" ? translate(lang, "verifiedBadge") : teePhase === "unverified" ? translate(lang, "unverifiedBadge") : translate(lang, "teeReady");
+    teePhase === "verified"
+      ? translate(lang, "verifiedBadge")
+      : teePhase === "unverified"
+        ? translate(lang, "unverifiedBadge")
+        : teePhase === "local"
+          ? translate(lang, "localPreview")
+          : translate(lang, "teeReady");
   const teeClass =
-    teePhase === "verified" ? "border-[#00EC97]/50 bg-[#00EC97]/15 text-[#b8ffe0]" : "border-[#FF8A00]/50 bg-[#FF8A00]/15 text-[#ffd7a1]";
+    teePhase === "verified"
+      ? "border-[#00EC97]/50 bg-[#00EC97]/15 text-[#b8ffe0]"
+      : teePhase === "local"
+        ? "border-white/20 bg-white/8 text-white/75"
+        : "border-[#FF8A00]/50 bg-[#FF8A00]/15 text-[#ffd7a1]";
 
   return (
     <div className="flex min-h-[calc(100dvh-11rem)] flex-col gap-2">
@@ -419,6 +434,7 @@ export function CopilotPanel({
                 baseUrl={baseUrl}
                 ownerReady={ownerReady}
                 onDryRun={onDryRun}
+                onOpenGuard={onOpenGuard}
                 onExecute={onExecute}
                 onRetryTranslate={onRetryTranslate}
               />
@@ -531,6 +547,7 @@ function AssistantBubble({
   baseUrl,
   ownerReady,
   onDryRun,
+  onOpenGuard,
   onExecute,
   onRetryTranslate,
 }: {
@@ -538,8 +555,9 @@ function AssistantBubble({
   message: ChatMessage;
   baseUrl: string;
   ownerReady: boolean;
-  onDryRun?: () => void;
-  onExecute?: () => void;
+  onDryRun?: (intentId: string) => void;
+  onOpenGuard?: (intentId: string) => void;
+  onExecute?: (intentId: string) => void;
   onRetryTranslate?: (id: string) => void;
 }) {
   const body = visibleText(message, lang);
@@ -561,26 +579,27 @@ function AssistantBubble({
   const curl = signatureCurl(baseUrl, attestation.chatId, attestation.model);
   const reportCurl = attestationCurl(baseUrl, attestation.model, attestation.nonce);
   const combined = `${attestation.requestSha256}:${attestation.responseSha256}`;
-  const serverVerified = attestation.verification.status === "verified";
-  const badgeLabel = translate(lang, serverVerified ? "verifiedBadge" : "unverifiedBadge");
+  const localPreview = isLocalPreview(attestation.verification);
+  const serverVerified = !localPreview && attestation.verification.status === "verified";
+  const badgeLabel = translate(lang, localPreview ? "localPreview" : serverVerified ? "verifiedBadge" : "unverifiedBadge");
   return (
     <article className="mr-6 min-w-0 max-w-full rounded-2xl border border-white/10 bg-black/25 px-3 py-3">
       <div className="mb-2 text-[10px] uppercase tracking-[0.16em] text-[#00EC97]">KOTHA</div>
-      <div className="mb-2 flex flex-wrap gap-2">
+      <div className="mb-2 flex flex-wrap items-center gap-2">
         <span
-          title={translate(lang, serverVerified ? "teeVerifiedTip" : "teeUnverifiedTip")}
+          title={localPreview ? translate(lang, "localPreview") : translate(lang, serverVerified ? "teeVerifiedTip" : "teeUnverifiedTip")}
           className={cn(
             "max-w-full whitespace-normal break-words rounded-full border px-2 py-0.5 font-mono text-[10px] leading-snug",
-            serverVerified
-              ? "border-[#00EC97]/50 bg-[#00EC97]/15 text-[#b8ffe0]"
-              : "border-[#FF8A00]/50 bg-[#FF8A00]/15 text-[#ffd7a1]",
+            localPreview
+              ? "border-white/20 bg-white/8 text-white/75"
+              : serverVerified
+                ? "border-[#00EC97]/50 bg-[#00EC97]/15 text-[#b8ffe0]"
+                : "border-[#FF8A00]/50 bg-[#FF8A00]/15 text-[#ffd7a1]",
           )}
         >
           {badgeLabel}
         </span>
-        <Badge className={riskTone(decision.risk_score)}>
-          {translate(lang, "risk")} {decision.risk_score}
-        </Badge>
+        <RiskMark lang={lang} score={decision.risk_score} />
         <Badge className={policyTone(decision.policy_status)} title={policyTip(lang, decision.policy_status, decision.policy_reason)}>
           {translate(lang, policyKey(message.statusCode || decision.policy_status))}
         </Badge>
@@ -610,11 +629,15 @@ function AssistantBubble({
       ) : null}
       <ActionCard
         lang={lang}
-        intentAmount={decision.intent?.amount}
+        messageId={message.id}
+        intent={decision.intent}
+        dryRun={message.dryRun}
+        dryRunShown={message.dryRunShown === true}
         fallbackText={body}
         status={decision.policy_status}
         ownerReady={ownerReady}
         onDryRun={onDryRun}
+        onOpenGuard={onOpenGuard}
         onExecute={onExecute}
       />
       <details className="mt-3 rounded-xl border border-[#00EC97]/20 bg-[#00EC97]/5 px-3 py-2">
@@ -658,23 +681,31 @@ function AssistantBubble({
 
 function ActionCard({
   lang,
-  intentAmount,
+  messageId,
+  intent,
+  dryRun,
+  dryRunShown,
   fallbackText,
   status,
   ownerReady,
   onDryRun,
+  onOpenGuard,
   onExecute,
 }: {
   lang: Lang;
-  intentAmount?: string;
+  messageId: string;
+  intent: AegisIntent | null;
+  dryRun?: DryRunPreview | null;
+  dryRunShown: boolean;
   fallbackText: string;
   status: PolicyStatus;
   ownerReady: boolean;
-  onDryRun?: () => void;
-  onExecute?: () => void;
+  onDryRun?: (intentId: string) => void;
+  onOpenGuard?: (intentId: string) => void;
+  onExecute?: (intentId: string) => void;
 }) {
   const reasonId = useId();
-  const numeric = Number(intentAmount);
+  const numeric = Number(intent?.amount);
   const fromIntent = Number.isFinite(numeric) && numeric > 0;
   const fromText = readActionCard(fallbackText);
   if (!fromIntent && !fromText) return null;
@@ -685,8 +716,17 @@ function ActionCard({
   const tip = enabled ? undefined : !ownerReady ? translate(lang, "connectOwner") : translate(lang, "blockedByPolicy");
   return (
     <div className="mt-3 rounded-2xl border border-white/10 bg-black/30 p-3">
+      {intent ? <IntentFacts lang={lang} intent={intent} dryRun={dryRun} /> : null}
+      {dryRunShown && dryRun ? (
+        <div className="mb-3 rounded-xl border border-white/10 bg-black/30 p-3">
+          <DryRunSummary lang={lang} dryRun={dryRun} />
+          <button type="button" onClick={() => onOpenGuard?.(messageId)} className="mt-2 text-xs text-[#7DD3FC] underline-offset-2 hover:underline">
+            {translate(lang, "openInGuard")}
+          </button>
+        </div>
+      ) : null}
       <div className="flex flex-wrap gap-2">
-        <button type="button" onClick={onDryRun} className="h-9 rounded-xl border border-white/15 px-3 text-sm text-white">
+        <button type="button" onClick={() => onDryRun?.(messageId)} className="h-9 rounded-xl border border-white/15 px-3 text-sm text-white">
           {translate(lang, "dryRun")}
         </button>
         <span title={tip} className="inline-flex">
@@ -701,7 +741,7 @@ function ActionCard({
             aria-disabled={!enabled}
             aria-describedby={tip ? reasonId : undefined}
             title={tip}
-            onClick={enabled ? onExecute : undefined}
+            onClick={enabled ? () => onExecute?.(messageId) : undefined}
             className="h-9 rounded-xl bg-[#00EC97] px-3 text-sm font-semibold text-[#04140d] disabled:cursor-not-allowed disabled:bg-[#2a3038] disabled:text-white/45 disabled:opacity-100"
           >
             {translate(lang, "executeButton")}
@@ -709,6 +749,54 @@ function ActionCard({
         </span>
       </div>
     </div>
+  );
+}
+
+function IntentFacts({ lang, intent, dryRun }: { lang: Lang; intent: AegisIntent; dryRun?: DryRunPreview | null }) {
+  const origin = previewSymbol(intent.origin_asset, intent.action);
+  const destination = previewSymbol(intent.destination_asset, intent.action);
+  const native = isNativeNearTransfer(intent);
+  return (
+    <div className="mb-3 space-y-1 text-sm text-white/90">
+      <div className="flex flex-wrap items-center gap-2">
+        <span className={cn("rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase", actionTone(intent.action))}>
+          {translate(lang, actionCopyKey(intent.action))}
+        </span>
+        {native ? <span className="text-xs text-[#d9ffe8]">{translate(lang, "nativeNear")}</span> : null}
+      </div>
+      <p>
+        {translate(lang, "amount")}: {intent.amount} {origin}
+        {intent.action === "swap" && dryRun ? ` → ${dryRun.quote.expectedAmountOut} ${destination}` : intent.recipient ? ` → ${intent.recipient}` : ""}
+      </p>
+      {showSlippageRow(intent) && dryRun ? (
+        <p>
+          {translate(lang, "slippage")}: {dryRun.quote.slippageBps} bps
+        </p>
+      ) : null}
+      {showWnearLine(intent) ? <p className="text-xs text-white/55">{translate(lang, "nearSettles")}</p> : null}
+    </div>
+  );
+}
+
+function RiskMark({ lang, score }: { lang: Lang; score: number }) {
+  const label = translate(lang, "riskScale");
+  return (
+    <span className="inline-flex items-center gap-1">
+      <Badge className={riskTone(score)}>
+        {translate(lang, "risk")} {score}
+      </Badge>
+      <span className="group relative inline-flex">
+        <button type="button" className="inline-flex h-4 w-4 items-center justify-center text-white/55" aria-label={label} title={label}>
+          <Info className="h-3.5 w-3.5" aria-hidden="true" />
+        </button>
+        <span
+          role="tooltip"
+          className="pointer-events-none absolute left-0 top-full z-20 mt-1 hidden w-56 rounded-lg border border-white/15 bg-[#0c1411] p-2 text-[11px] leading-snug text-white group-focus-within:block group-hover:block"
+        >
+          {label}
+        </span>
+      </span>
+    </span>
   );
 }
 
@@ -774,6 +862,11 @@ function visibleText(message: ChatMessage, lang: Lang): string {
   if (message.errorCode === "voice_too_long") return translate(lang, "voiceTooLong");
   if (message.errorCode === "load_fail") return translate(lang, "loadFail");
   if (message.errorCode === "request_timeout") return translate(lang, "requestTimeout");
+  const decision = message.attestation?.decision;
+  if (decision && /prompt injection/i.test(decision.policy_reason)) return translate(lang, "injectionBlocked");
+  if (decision?.intent?.action === "swap") {
+    return swapReply(lang, decision.intent, message.dryRun, message.statusCode || decision.policy_status);
+  }
   if (usesFixedPreviewCopy(message)) {
     const status = message.statusCode || message.attestation?.decision.policy_status;
     if (status === "NEEDS_WALLET") return translate(lang, "needsWallet");
@@ -781,6 +874,19 @@ function visibleText(message: ChatMessage, lang: Lang): string {
   }
   if ((lang === "bn" || lang === "en") && message.translations?.[lang]) return message.translations[lang] || message.text;
   return message.text;
+}
+
+function swapReply(lang: Lang, intent: AegisIntent, dryRun: DryRunPreview | null | undefined, status: string): string {
+  if (status === "NEEDS_WALLET") return translate(lang, "needsWallet");
+  if (status === "INSUFFICIENT_BALANCE") return translate(lang, "insufficientBadge");
+  if (status === "BLOCKED" || !dryRun) return translate(lang, "swapBlocked");
+  return fillCopy(lang, "swapPreview", {
+    amount: intent.amount,
+    origin: previewSymbol(intent.origin_asset, "swap"),
+    destination: previewSymbol(intent.destination_asset, "swap"),
+    out: dryRun.quote.expectedAmountOut,
+    slippage: dryRun.quote.slippageBps,
+  });
 }
 
 function piiTypeLabel(lang: Lang, type: string): string {

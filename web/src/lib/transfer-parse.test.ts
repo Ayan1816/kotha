@@ -300,7 +300,7 @@ test("plain NEAR transfers show NEAR with zero slippage and skip the model", () 
   assert.equal(isDeterministicCommand("alice.testnet কে 0.01 NEAR পাঠাও"), true);
   assert.equal(isDeterministicCommand("withdraw 1 NEAR"), true);
   assert.equal(isDeterministicCommand("what is near"), false);
-  assert.equal(isDeterministicCommand("Buy USDT with 2 NEAR"), false);
+  assert.equal(isDeterministicCommand("Buy USDT with 2 NEAR"), true);
   assert.equal(isDeterministicCommand("Put 5 USDT in the private vault"), false);
   const swap = previewIntent(
     {

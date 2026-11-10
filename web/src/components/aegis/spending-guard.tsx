@@ -1,7 +1,8 @@
 "use client";
 
-import { DryRunChecks, QuoteBody, dryRunIsBlocked, dryRunIsPass, dryRunLabel, dryRunTone, formatWarning } from "@/components/aegis/audit-panel";
+import { DryRunSummary, QuoteBody, dryRunIsBlocked, dryRunIsPass, dryRunLabel, dryRunTone, formatWarning } from "@/components/aegis/audit-panel";
 import { translate, type Lang } from "@/components/aegis/copy";
+import { actionCopyKey, isNativeNearTransfer, previewSymbol } from "@/components/aegis/format";
 import type { AegisIntent, ActivePolicy, DryRunPreview } from "@/lib/dashboard-types";
 import { useId } from "react";
 
@@ -67,7 +68,8 @@ export function SpendingGuard({
           {quoteError}
         </p>
       ) : null}
-      {intent && dryRun ? <DryRunCard lang={lang} dryRun={dryRun} /> : null}
+      {intent ? <IntentLine lang={lang} intent={intent} /> : null}
+      {intent && dryRun ? <DryRunCard key={`${intent.action}:${intent.amount}:${intent.recipient}:${intent.destination_asset}`} lang={lang} dryRun={dryRun} /> : null}
       <div className="mt-6 flex flex-wrap items-center gap-2">
         {policyBlocked ? (
           <p className="text-sm text-[#ffb3c0]">{blockedLine}</p>
@@ -100,9 +102,21 @@ export function SpendingGuard({
   );
 }
 
+function IntentLine({ lang, intent }: { lang: Lang; intent: AegisIntent }) {
+  const origin = previewSymbol(intent.origin_asset, intent.action);
+  const destination = previewSymbol(intent.destination_asset, intent.action);
+  const target = intent.action === "swap" ? destination : intent.recipient;
+  return (
+    <p className="mt-4 break-words text-sm text-white">
+      <span className="mr-2 font-mono text-[10px] uppercase tracking-[0.14em] text-[#b8ffe0]">{translate(lang, actionCopyKey(intent.action))}</span>
+      {isNativeNearTransfer(intent) ? `${translate(lang, "nativeNear")} · ` : null}
+      {intent.amount} {origin}
+      {target ? ` → ${target}` : ""}
+    </p>
+  );
+}
+
 function DryRunCard({ lang, dryRun }: { lang: Lang; dryRun: DryRunPreview }) {
-  const impact = dryRun.budgetImpact;
-  const remaining = Math.max(0, impact.dailyLimitUsd - impact.projectedSpentUsd);
   const tone = dryRunTone(dryRun);
   const shell =
     tone === "fail" ? "border-[#FF3B5C]/50 bg-[#FF3B5C]/10" : tone === "warn" ? "border-[#FF8A00]/40 bg-[#FF8A00]/10" : "border-[#00EC97]/40 bg-[#00EC97]/10";
@@ -111,13 +125,7 @@ function DryRunCard({ lang, dryRun }: { lang: Lang; dryRun: DryRunPreview }) {
   return (
     <div className={`mt-4 rounded-2xl border p-4 ${shell}`}>
       <p className={`text-sm font-semibold uppercase ${title}`}>{dryRunLabel(lang, dryRun)}</p>
-      <DryRunChecks lang={lang} dryRun={dryRun} />
-      <p className="mt-2 text-sm text-white">
-        {translate(lang, "projectedSpend")} ${impact.projectedSpentUsd.toFixed(2)} = {translate(lang, "usedToday")} ${impact.currentSpentUsd.toFixed(2)} + ${impact.txUsd.toFixed(2)}
-      </p>
-      <p className="mt-1 text-sm text-white/80">
-        {translate(lang, "remainingLimit")} ${remaining.toFixed(2)}
-      </p>
+      <DryRunSummary lang={lang} dryRun={dryRun} />
       {warning ? <p className="mt-2 text-sm text-[#ffd7a1]">{formatWarning(lang, warning)}</p> : null}
     </div>
   );

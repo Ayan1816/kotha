@@ -2,12 +2,11 @@
 
 import { CopyButton, HashRow } from "@/components/aegis/bits";
 import { translate, type CopyKey, type Lang } from "@/components/aegis/copy";
-import { actionTone, amountSummary, formatTimestamp, getExecutionCommand, shortHash } from "@/components/aegis/format";
+import { actionCopyKey, actionTone, amountSummary, displayRoute, formatTimestamp, getExecutionCommand, isNativeNearTransfer, previewSymbol, shortHash, showSlippageRow, showWnearLine, testnetLabel } from "@/components/aegis/format";
 import { judgeReceipt, readChainExecution, rehashReceipt } from "@/lib/receipt-canonical";
 import { explorerTxUrl, publicNetwork } from "@/lib/wallet-proof";
 import { AnimatedNumberTicker, ShimmerActionButton, SpotlightGlassCard } from "@/components/ui/aegis-primitives";
 import type { AegisIntent, AttestedInference, DryRunPreview, ExecutionResult, VerifiedExecution } from "@/lib/dashboard-types";
-import { assetLabel, previewSymbol } from "@/components/aegis/format";
 import { PhoneBook } from "@/components/aegis/phone-book";
 import { Download } from "lucide-react";
 import { useState } from "react";
@@ -185,11 +184,26 @@ function warningLabel(lang: Lang, warning: string): string {
   return formatWarning(lang, warning);
 }
 
+export function DryRunSummary({ lang, dryRun }: { lang: Lang; dryRun: DryRunPreview }) {
+  const impact = dryRun.budgetImpact;
+  const remaining = Math.max(0, impact.dailyLimitUsd - impact.projectedSpentUsd);
+  return (
+    <div>
+      <DryRunChecks lang={lang} dryRun={dryRun} />
+      <p className="mt-2 text-sm text-white">
+        {translate(lang, "projectedSpend")} ${impact.projectedSpentUsd.toFixed(2)} = {translate(lang, "usedToday")} ${impact.currentSpentUsd.toFixed(2)} + ${impact.txUsd.toFixed(2)}
+      </p>
+      <p className="mt-1 text-sm text-white/80">
+        {translate(lang, "remainingLimit")} ${remaining.toFixed(2)}
+      </p>
+    </div>
+  );
+}
+
 export function QuoteBody({ lang, intent, dryRun, remittanceLine }: { lang: Lang; intent: AegisIntent; dryRun: DryRunPreview; remittanceLine: string | null }) {
-  const origin = assetLabel(intent.origin_asset);
   const originSymbol = previewSymbol(intent.origin_asset, intent.action);
   const destinationSymbol = previewSymbol(intent.destination_asset, intent.action);
-  const settlesNear = (intent.action === "transfer" || intent.action === "withdraw") && origin.symbol === "wNEAR";
+  const nativeNear = isNativeNearTransfer(intent);
   const impact = dryRun.budgetImpact;
   const width = Math.max(0, Math.min(100, impact.utilizationPct));
   const tone = dryRunTone(dryRun);
@@ -199,24 +213,27 @@ export function QuoteBody({ lang, intent, dryRun, remittanceLine }: { lang: Lang
   return (
     <div className="space-y-3 text-sm">
       <div className="flex flex-wrap items-center gap-2">
-        <span className={`rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase ${actionTone(intent.action)}`}>{intent.action}</span>
+        <span className={`rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase ${actionTone(intent.action)}`}>
+          {translate(lang, actionCopyKey(intent.action))}
+        </span>
         <span className={`rounded-full border px-2 py-0.5 font-mono text-[10px] uppercase ${badge}`}>
           {dryRunLabel(lang, dryRun)}
         </span>
+        {nativeNear ? <span className="text-xs text-[#d9ffe8]">{translate(lang, "nativeNear")}</span> : null}
       </div>
       <DryRunChecks lang={lang} dryRun={dryRun} />
       <dl className="grid grid-cols-1 gap-2 text-xs min-[376px]:grid-cols-2">
         <Info label={translate(lang, "amount")} value={`${intent.amount} ${originSymbol}`} />
         <Info label={translate(lang, "expected")} value={`${dryRun.quote.expectedAmountOut} ${destinationSymbol}`} />
         <Info label={translate(lang, "fee")} value="" ticker={dryRun.quote.feeUsd} />
-        <Info label={translate(lang, "targetShard")} value={testnetLabel(dryRun.quote.shard)} />
+        <Info label={translate(lang, "targetShard")} value={testnetLabel(lang, dryRun.quote.shard)} />
         <Info label={translate(lang, "rate")} value={dryRun.quote.rate} />
-        <Info label={translate(lang, "slippage")} value={`${dryRun.quote.slippageBps} bps`} />
+        {showSlippageRow(intent) ? <Info label={translate(lang, "slippage")} value={`${dryRun.quote.slippageBps} bps`} /> : null}
         <Info label={translate(lang, "recipient")} value={intent.recipient || "—"} wide />
       </dl>
       {remittanceLine ? <p className="break-words font-mono text-[11px] leading-relaxed text-[#d9ffe8]">{remittanceLine}</p> : null}
-      <p className="break-words font-mono text-[11px] text-white/55">{testnetLabel(dryRun.quote.route)}</p>
-      {settlesNear ? <p className="break-words font-mono text-[11px] text-white/55">{translate(lang, "nearSettles")}</p> : null}
+      <p className="break-words font-mono text-[11px] text-white/55">{displayRoute(lang, intent, dryRun.quote.route)}</p>
+      {showWnearLine(intent) ? <p className="break-words font-mono text-[11px] text-white/55">{translate(lang, "nearSettles")}</p> : null}
       <div>
         <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-[0.14em] text-white/45">
           <span>{translate(lang, "budgetImpact")}</span>
@@ -244,11 +261,6 @@ export function QuoteBody({ lang, intent, dryRun, remittanceLine }: { lang: Lang
       </div>
     </div>
   );
-}
-
-function testnetLabel(value: string): string {
-  if (process.env.NEXT_PUBLIC_NETWORK === "mainnet") return value;
-  return value.replace(/\b(?:outlayer\.near|intents\.near|intents\.far)\b/g, "demo (testnet)");
 }
 
 function Info({ label, value, ticker, wide }: { label: string; value: string; ticker?: number; wide?: boolean }) {

@@ -1,3 +1,4 @@
+import { fillCopy, translate } from "@/components/aegis/copy";
 import { createHash, randomBytes } from "crypto";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
@@ -670,6 +671,11 @@ export function isDeterministicCommand(message: string): boolean {
   const folded = foldPrompt(message);
   if (isAdversarial(folded)) return false;
   const action = detectAction(folded);
+  if (action === "swap") {
+    const parsed = parseAmountToken(folded);
+    if (!parsed?.amount || Number(parsed.amount) <= 0) return false;
+    return findAssets(folded).length >= 2;
+  }
   if (action !== "transfer" && action !== "withdraw") return false;
   const parsed = parseAmountToken(folded);
   if (!parsed?.amount || !parsed.token) return false;
@@ -928,6 +934,15 @@ function paintTransfer(intent: AegisIntent | null, fields: TransferFields): Aegi
   };
 }
 
+export function localCommandDecision(
+  userMessage: string,
+  policyContext: unknown,
+  balancesContext: unknown,
+  locale: ChatLocale = "en",
+): CopilotDecision {
+  return decideLocally(userMessage, policyContext, balancesContext, null, locale);
+}
+
 function decideLocally(
   userMessage: string,
   policyContext: unknown,
@@ -938,7 +953,7 @@ function decideLocally(
   const policy = normalizePolicyContext(policyContext);
   const balances = normalizeBalancesContext(balancesContext);
   const folded = foldPrompt(userMessage);
-  if (isAdversarial(folded)) return adversarialDecision(policy, balances, locale, hasBengali(userMessage));
+  if (isAdversarial(folded)) return adversarialDecision(policy, balances, locale);
   if (isGeneralQuestion(userMessage)) return answerAsQuestion(null, locale, userMessage);
   const drafted = parseUserIntent(folded);
   if (!drafted) {
@@ -970,7 +985,6 @@ function adversarialDecision(
   policy: ReturnType<typeof normalizePolicyContext>,
   balances: ReturnType<typeof normalizeBalancesContext>,
   locale: ChatLocale,
-  userWroteBengali: boolean,
 ): CopilotDecision {
   const intent: AegisIntent = {
     action: "transfer",
@@ -984,10 +998,7 @@ function adversarialDecision(
     confidential: false,
   };
   const preview = previewIntent(intent, policy, balances);
-  const bangla =
-    "প্রম্পট-ইনজেকশন আটকানো হয়েছে। প্রহরী লিমিট ভোলা যাবে না। ৫০০ USDT attacker.near-এ পাঠানো ব্লক। PROHORI_PER_TX_LIMIT_EXCEEDED — এই লেনদেন প্রতি-লেনদেন সীমা ছাড়িয়েছে। PROHORI_DAILY_BUDGET_EXCEEDED — এই লেনদেন দৈনিক বাজেট ছাড়িয়েছে।";
-  const localized = blockedExplanation(locale);
-  const explanation = locale === "en" && userWroteBengali ? `${localized} ${bangla}` : locale === "bn" ? bangla : localized;
+  const explanation = translate(locale, "injectionBlocked");
   return {
     explanation,
     risk_score: 99,
@@ -997,23 +1008,14 @@ function adversarialDecision(
   };
 }
 
-function blockedExplanation(locale: ChatLocale): string {
-  if (locale === "es") {
-    return "Inyección de prompt bloqueada. Kotha no ignorará los límites ni enviará todos los fondos. Cortafuegos BLOCKED, riesgo 99. PROHORI_PER_TX_LIMIT_EXCEEDED y PROHORI_DAILY_BUDGET_EXCEEDED.";
-  }
-  if (locale === "ar") {
-    return "تم حظر حقن الموجّه. لن يتجاهل Kotha الحدود ولن يرسل كل الأموال. الحالة BLOCKED والمخاطر 99. PROHORI_PER_TX_LIMIT_EXCEEDED و PROHORI_DAILY_BUDGET_EXCEEDED.";
-  }
-  if (locale === "hi") {
-    return "प्रॉम्प्ट इंजेक्शन रोक दिया गया। Kotha सीमाएँ नहीं भूलेगा और सारा फंड नहीं भेजेगा। BLOCKED, जोखिम 99. PROHORI_PER_TX_LIMIT_EXCEEDED और PROHORI_DAILY_BUDGET_EXCEEDED.";
-  }
-  if (locale === "fr") {
-    return "Injection de prompt bloquée. Kotha n'ignorera pas les limites et n'enverra pas tous les fonds. Pare-feu BLOCKED, risque 99. PROHORI_PER_TX_LIMIT_EXCEEDED et PROHORI_DAILY_BUDGET_EXCEEDED.";
-  }
-  if (locale === "zh") {
-    return "提示注入已被阻止。Kotha 不会忽略限额，也不会转出全部资金。防火墙 BLOCKED，风险 99。PROHORI_PER_TX_LIMIT_EXCEEDED 与 PROHORI_DAILY_BUDGET_EXCEEDED。";
-  }
-  return "Prompt injection blocked. Kotha will not ignore spending limits or send all funds. The AI firewall returned BLOCKED with risk 99. PROHORI_PER_TX_LIMIT_EXCEEDED — This transaction is over the per-transaction limit. PROHORI_DAILY_BUDGET_EXCEEDED — This transaction is over the daily budget.";
+function swapSentence(locale: ChatLocale, intent: AegisIntent, preview: DryRunPreview): string {
+  return fillCopy(locale, "swapPreview", {
+    amount: intent.amount,
+    origin: spokenSymbol(intent.origin_asset, "swap"),
+    destination: spokenSymbol(intent.destination_asset, "swap"),
+    out: preview.quote.expectedAmountOut,
+    slippage: preview.quote.slippageBps,
+  });
 }
 
 function bilingualExplanation(
@@ -1025,6 +1027,10 @@ function bilingualExplanation(
   redactionNote: string,
   locale: ChatLocale,
 ): string {
+  if (intent.action === "swap") {
+    if (status === "BLOCKED") return translate(locale, "swapBlocked");
+    return swapSentence(locale, intent, preview);
+  }
   const english = `${explainIntent(intent, preview, status, assumedAmount)}${redactionNote}`;
   const word = statusWord(status, "bn");
   if (!replyUsesBengali(locale, folded)) {
@@ -1037,9 +1043,6 @@ function bilingualExplanation(
   if (intent.action === "shield") {
     return `${intent.amount} USDT গোপন ভল্ট intents.far-এ রাখা হচ্ছে। নীতি: ${word}। Shield ${intent.amount} USDT (nep141:usdt.tether-token.near) into intents.far. Policy ${status}. ${english}`;
   }
-  if (intent.action === "swap") {
-    return `${intent.amount} wNEAR (nep141:wrap.near) দিয়ে USDT (nep141:usdt.tether-token.near) কেনা হচ্ছে। নীতি: ${word}। Swap ${intent.amount} wNEAR (nep141:wrap.near) to USDT (nep141:usdt.tether-token.near). Policy ${status}. ${english}`;
-  }
   return `${english} বাংলা নীতি: ${word}।`;
 }
 
@@ -1048,8 +1051,9 @@ function parseUserIntent(message: string): { intent: AegisIntent; assumedAmount:
   if (!action) return null;
   const assets = findAssets(message);
   const amount = detectAmount(message, action);
-  const origin = originFor(action, assets, amount.usdExplicit);
-  const destination = destinationFor(action, assets, origin);
+  const pair = action === "swap" ? swapEndpoints(message, assets) : null;
+  const origin = pair?.origin || originFor(action, assets, amount.usdExplicit);
+  const destination = pair?.destination || destinationFor(action, assets, origin);
   const assumedAmount = amount.assumed;
   return {
     assumedAmount,
@@ -1065,6 +1069,32 @@ function parseUserIntent(message: string): { intent: AegisIntent; assumedAmount:
       confidential: detectConfidential(message, action),
     },
   };
+}
+
+function swapEndpoints(text: string, assets: string[]): { origin: string; destination: string } {
+  const token = "usdt|usdc|tether|wnear|wrapped\\s+near|near";
+  const buy = text.match(
+    new RegExp(`\\b(?:buy|purchase)\\s+(${token})\\b[\\s\\S]{0,48}?\\b(?:with|using)\\s+(?:[0-9][0-9,]*(?:\\.[0-9]+)?\\s*)?(${token})\\b`, "i"),
+  );
+  if (buy?.[1] && buy[2]) {
+    const origin = canonicalAsset(buy[2]);
+    const destination = canonicalAsset(buy[1]);
+    if (origin && destination && origin !== destination) return { origin, destination };
+  }
+  const directed = text.match(
+    new RegExp(
+      `\\b(?:swap|exchange|convert|trade)\\s+(?:[0-9][0-9,]*(?:\\.[0-9]+)?\\s*)?(${token})\\b[\\s\\S]{0,32}?\\b(?:to|for|into)\\s+(${token})\\b`,
+      "i",
+    ),
+  );
+  if (directed?.[1] && directed[2]) {
+    const origin = canonicalAsset(directed[1]);
+    const destination = canonicalAsset(directed[2]);
+    if (origin && destination && origin !== destination) return { origin, destination };
+  }
+  const origin = assets.find((asset) => asset.includes("wrap.near")) || assets[0] || "nep141:wrap.near";
+  const destination = assets.find((asset) => asset !== origin) || "nep141:usdt.tether-token.near";
+  return { origin, destination };
 }
 
 function detectAction(text: string): IntentAction | null {

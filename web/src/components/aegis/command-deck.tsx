@@ -9,10 +9,12 @@ import { translate, type Lang } from "@/components/aegis/copy";
 import { PhoneBook } from "@/components/aegis/phone-book";
 import { PolicyPanel } from "@/components/aegis/policy-panel";
 import { SpendingGuard } from "@/components/aegis/spending-guard";
-import { TelemetryBar, type TeePhase } from "@/components/aegis/telemetry-bar";
+import { TelemetryBar } from "@/components/aegis/telemetry-bar";
 import { ShimmerActionButton } from "@/components/ui/aegis-primitives";
 import { invalidAmountReason } from "@/lib/budget-math";
 import { displayReply, type LoaderStep } from "@/lib/chat-stream";
+import { selectArmedQuote } from "@/lib/guard-quote";
+import { isLocalPreview, overallTeePhase } from "@/lib/tee-status";
 import { resolveRemittance } from "@/lib/phone-resolver";
 import {
   chainMatches,
@@ -51,6 +53,7 @@ const ProofsTable = dynamic(() => import("@/components/aegis/audit-panel").then(
 type TabId = "chat" | "guard" | "proofs" | "settings";
 
 type ArmedQuote = {
+  intentId: string;
   intent: AegisIntent;
   dryRun: DryRunPreview;
   attestation: AttestedInference;
@@ -76,7 +79,6 @@ export function CommandDeck() {
   const [chatStep, setChatStep] = useState<LoaderStep | null>(null);
   const [liveText, setLiveText] = useState("");
   const [latestChain, setLatestChain] = useState<ChainLink | null>(null);
-  const [teePhase, setTeePhase] = useState<TeePhase>("idle");
   const [remittanceLine, setRemittanceLine] = useState<string | null>(null);
   const [lastPrompt, setLastPrompt] = useState("");
   const [adminCode, setAdminCode] = useState("");
@@ -85,6 +87,7 @@ export function CommandDeck() {
   const balanceReader = useRef(near.getBalance);
   balanceReader.current = near.getBalance;
   const translateFlight = useRef(new Set<string>());
+  const dryTicket = useRef(0);
 
   const frozen = dashboard?.agentState.frozen ?? dashboard?.agentState.policy.frozen ?? false;
   const accountId = (near.signedAccountId || "").trim();
@@ -229,15 +232,40 @@ export function CommandDeck() {
     }
   }
 
-  function publishPreview(intent: AegisIntent, preview: DryRunPreview) {
+  function publishPreview(intentId: string, intent: AegisIntent, preview: DryRunPreview) {
     const invalid = invalidAmountReason(intent, preview.warnings);
     if (invalid) {
-      setQuote(null);
+      setQuote((current) => (current?.intentId === intentId ? null : current));
       setQuoteError(translate(lang, "invalidAmount"));
       return;
     }
     setQuoteError(null);
-    setQuote((current) => (current && sameIntent(current.intent, intent) ? { ...current, dryRun: preview, execution: null } : current));
+    setQuote((current) => (current && current.intentId === intentId ? { ...current, intent, dryRun: preview, execution: null } : current));
+    setMessages((current) => current.map((item) => (item.id === intentId ? { ...item, dryRun: preview } : item)));
+  }
+
+  function intentCards(source: ChatMessage[]) {
+    const cards: Array<{ id: string; intent: AegisIntent; dryRun: DryRunPreview | null; attestation: AttestedInference }> = [];
+    for (const message of source) {
+      const intent = message.attestation?.decision.intent;
+      if (!intent || !message.attestation) continue;
+      cards.push({ id: message.id, intent, dryRun: message.dryRun ?? null, attestation: message.attestation });
+    }
+    return cards;
+  }
+
+  function quoteFromCard(intentId: string): ArmedQuote | null {
+    const card = selectArmedQuote(intentCards(messages), intentId);
+    if (!card?.attestation) return null;
+    const preview = card.dryRun;
+    if (!preview) return null;
+    return {
+      intentId: card.id,
+      intent: card.intent,
+      dryRun: preview,
+      attestation: card.attestation,
+      execution: quote?.intentId === card.id ? quote.execution : null,
+    };
   }
 
   async function refreshRemittance(text: string) {
@@ -290,13 +318,13 @@ export function CommandDeck() {
       const intent = result.attestation.decision.intent;
       const preview = result.dryRun;
       const invalid = intent && preview ? invalidAmountReason(intent, preview.warnings) : null;
-      setTeePhase(result.attestation.verification.status === "verified" ? "verified" : "unverified");
       const reply = displayReply(result.attestation.decision.explanation);
       const replyLang = textLang(reply, lang);
+      const replyId = crypto.randomUUID();
       setMessages((current) => [
         ...current,
         {
-          id: crypto.randomUUID(),
+          id: replyId,
           role: "assistant",
           lang: replyLang,
           text: reply,
@@ -304,6 +332,7 @@ export function CommandDeck() {
           statusCode: result.attestation.decision.policy_status,
           attestation: result.attestation,
           dryRun: invalid ? null : preview,
+          dryRunShown: false,
         },
       ]);
       if (!intent || !preview) {
@@ -318,6 +347,7 @@ export function CommandDeck() {
       }
       setQuoteError(null);
       setQuote({
+        intentId: replyId,
         intent,
         dryRun: preview,
         attestation: result.attestation,
@@ -338,7 +368,6 @@ export function CommandDeck() {
         },
       ]);
       setQuote(null);
-      setTeePhase("unverified");
       if (isAmountError(message, error)) setQuoteError(translate(lang, "invalidAmount"));
     } finally {
       setChatStep(null);
@@ -369,6 +398,7 @@ export function CommandDeck() {
 
   async function savePolicy(patch: PolicyPatch) {
     const intent = quote?.intent ?? null;
+    const intentId = quote?.intentId ?? "";
     try {
       const payload = { policy: patch };
       const wallet = await ownerProof("update_policy", payload);
@@ -378,9 +408,9 @@ export function CommandDeck() {
       if (!intent) return;
       try {
         const dry = await run("quote", () => postDryRun(intent, accountId));
-        publishPreview(intent, dry.preview);
+        publishPreview(intentId, intent, dry.preview);
       } catch (error) {
-        if (error instanceof DeckRequestError && error.preview) publishPreview(intent, error.preview);
+        if (error instanceof DeckRequestError && error.preview) publishPreview(intentId, intent, error.preview);
         setNotice(error instanceof Error ? error.message : translate(lang, "loadFail"));
       }
     } catch (error) {
@@ -454,40 +484,101 @@ export function CommandDeck() {
 
   async function refreshQuote() {
     if (!quote) return;
+    const intentId = quote.intentId;
     const intent = quote.intent;
     try {
       const result = await run("quote", () => postDryRun(intent, accountId));
-      publishPreview(intent, result.preview);
+      publishPreview(intentId, intent, result.preview);
     } catch (error) {
-      if (error instanceof DeckRequestError && error.preview) publishPreview(intent, error.preview);
+      if (error instanceof DeckRequestError && error.preview) publishPreview(intentId, intent, error.preview);
       setNotice(error instanceof Error ? error.message : translate(lang, "loadFail"));
     }
   }
 
-  async function execute() {
-    if (!quote) return;
+  async function dryRunCard(intentId: string) {
+    const card = selectArmedQuote(intentCards(messages), intentId);
+    if (!card) return;
+    const intent = card.intent;
+    const ticket = ++dryTicket.current;
+    setMessages((current) => current.map((item) => (item.id === intentId ? { ...item, dryRunShown: true } : item)));
+    if (card.dryRun) {
+      setQuoteError(null);
+      setQuote({
+        intentId: card.id,
+        intent,
+        dryRun: card.dryRun,
+        attestation: card.attestation,
+        execution: quote?.intentId === card.id ? quote.execution : null,
+      });
+    }
+    try {
+      const result = await run("quote", () => postDryRun(intent, accountId));
+      if (dryTicket.current !== ticket) return;
+      const invalid = invalidAmountReason(intent, result.preview.warnings);
+      if (invalid) {
+        setQuote((current) => (current?.intentId === intentId ? null : current));
+        setQuoteError(translate(lang, "invalidAmount"));
+        return;
+      }
+      setQuoteError(null);
+      setQuote({
+        intentId: card.id,
+        intent,
+        dryRun: result.preview,
+        attestation: card.attestation,
+        execution: null,
+      });
+      setMessages((current) => current.map((item) => (item.id === intentId ? { ...item, dryRun: result.preview, dryRunShown: true } : item)));
+    } catch (error) {
+      if (dryTicket.current !== ticket) return;
+      if (error instanceof DeckRequestError && error.preview) {
+        setQuote({
+          intentId: card.id,
+          intent,
+          dryRun: error.preview,
+          attestation: card.attestation,
+          execution: null,
+        });
+        setMessages((current) => current.map((item) => (item.id === intentId ? { ...item, dryRun: error.preview, dryRunShown: true } : item)));
+      }
+      setNotice(error instanceof Error ? error.message : translate(lang, "loadFail"));
+    }
+  }
+
+  function openGuard(intentId: string) {
+    const armed = quoteFromCard(intentId);
+    if (armed) setQuote(armed);
+    setTab("guard");
+  }
+
+  async function execute(intentId?: string) {
+    const armed = intentId ? quoteFromCard(intentId) : quote;
+    if (!armed) return;
+    if (intentId) setQuote(armed);
     try {
       const account = (near.signedAccountId || "").trim();
       if (!admin && ownerConfigured && account !== configuredOwnerId()) {
         setNotice(translate(lang, "connectOwner"));
         return;
       }
-      if (quote.attestation.verification.status !== "verified") {
-        setNotice(quote.attestation.verification.reason || translate(lang, "unverifiedBadge"));
+      if (armed.attestation.verification.status !== "verified") {
+        setNotice(isLocalPreview(armed.attestation.verification) ? translate(lang, "localPreview") : armed.attestation.verification.reason || translate(lang, "unverifiedBadge"));
         return;
       }
       const teeAttestation = {
-        chatId: quote.attestation.chatId,
-        requestSha256: quote.attestation.requestSha256,
-        responseSha256: quote.attestation.responseSha256,
-        signature: quote.attestation.signature,
-        signing_address: quote.attestation.signing_address,
-        verificationStatus: quote.attestation.verification.status,
+        chatId: armed.attestation.chatId,
+        requestSha256: armed.attestation.requestSha256,
+        responseSha256: armed.attestation.responseSha256,
+        signature: armed.attestation.signature,
+        signing_address: armed.attestation.signing_address,
+        verificationStatus: armed.attestation.verification.status,
       };
-      const payload = { intent: quote.intent, teeAttestation };
+      const payload = { intent: armed.intent, teeAttestation };
       const wallet = await ownerProof("execute", payload);
-      const result = await run("execute", () => postExecute(quote.intent, teeAttestation, wallet));
-      setQuote((current) => (current ? { ...current, execution: result.execution, dryRun: result.execution.preview } : current));
+      const result = await run("execute", () => postExecute(armed.intent, teeAttestation, wallet));
+      setQuote((current) =>
+        current && current.intentId === armed.intentId ? { ...current, execution: result.execution, dryRun: result.execution.preview } : current,
+      );
       if (result.simulated || result.execution.remote_status === "simulated-demo") {
         setNotice(translate(lang, "demoSimulated"));
         await refresh();
@@ -527,7 +618,7 @@ export function CommandDeck() {
       }, 50);
     } catch (error) {
       if (error instanceof DeckRequestError && error.preview) {
-        setQuote((current) => (current ? { ...current, dryRun: error.preview as DryRunPreview } : current));
+        setQuote((current) => (current && current.intentId === armed.intentId ? { ...current, dryRun: error.preview as DryRunPreview } : current));
       }
       setNotice(error instanceof Error ? error.message : translate(lang, "loadFail"));
     }
@@ -637,7 +728,7 @@ export function CommandDeck() {
             liveText={liveText}
             autoRedact={autoRedact}
             frozen={frozen}
-            teePhase={teePhase}
+            teePhase={overallTeePhase(messages)}
             accountId={accountId}
             ownerReady={ownerReady}
             walletConnected={Boolean(accountId)}
@@ -646,11 +737,9 @@ export function CommandDeck() {
             onSend={(text, chipKey) => void send(text, chipKey)}
             onRetry={retryMessage}
             onRetryTranslate={retryTranslation}
-            onDryRun={() => {
-              setTab("guard");
-              void refreshQuote();
-            }}
-            onExecute={() => void execute()}
+            onDryRun={(id) => void dryRunCard(id)}
+            onOpenGuard={openGuard}
+            onExecute={(id) => void execute(id)}
           />
         ) : null}
         {dashboard && tab === "guard" ? (
@@ -780,17 +869,6 @@ function AdminModeCard({
   );
 }
 
-function sameIntent(left: AegisIntent, right: AegisIntent): boolean {
-  return (
-    left.action === right.action &&
-    left.origin_asset === right.origin_asset &&
-    left.destination_asset === right.destination_asset &&
-    left.amount === right.amount &&
-    left.recipient === right.recipient &&
-    left.confidential === right.confidential
-  );
-}
-
 function aiLimitCode(error: unknown): string {
   if (!(error instanceof DeckRequestError)) return "";
   if (error.code === "free_limit" || error.code === "wallet_limit") return error.code;
@@ -827,6 +905,7 @@ function readStoredMessages(value: unknown): ChatMessage[] {
       errorCode: typeof record.errorCode === "string" ? record.errorCode : undefined,
       attestation: record.attestation as ChatMessage["attestation"],
       dryRun: (record.dryRun as ChatMessage["dryRun"]) ?? null,
+      dryRunShown: record.dryRunShown === true,
     });
   }
   return out.slice(-40);

@@ -78,6 +78,15 @@ const es: Overlay = {
   welcomeBody: "Elige un aviso o usa el micrófono. Kotha responde en lenguaje claro.",
   serverSigned: "El firmante del servidor envió la ejecución.",
   micLanguage: "Idioma del micrófono",
+  demoTestnet: "demo (testnet)",
+  nativeNear: "Transferencia nativa de NEAR",
+  localPreview: "Vista previa local (sin llamada de IA)",
+  riskScale: "0-30 bajo, 31-70 revisar, 71-100 bloqueado",
+  openInGuard: "Abrir en el límite de gasto",
+  swapPreview: "Cambiar {amount} {origin} a {destination}. Salida estimada {out}. Deslizamiento máximo {slippage} bps.",
+  swapBlocked: "Este cambio está bloqueado por la política.",
+  injectionBlocked:
+    "Inyección de prompt bloqueada. Kotha no ignorará los límites ni enviará todos los fondos. Cortafuegos BLOCKED, riesgo 99. PROHORI_PER_TX_LIMIT_EXCEEDED y PROHORI_DAILY_BUDGET_EXCEEDED.",
 };
 
 const ar: Overlay = {
@@ -158,6 +167,15 @@ const ar: Overlay = {
   welcomeBody: "اختر طلباً أو استخدم الميكروفون. يجيب Kotha بلغة واضحة.",
   serverSigned: "أرسل موقّع الخادم التنفيذ.",
   micLanguage: "لغة الميكروفون",
+  demoTestnet: "demo (testnet)",
+  nativeNear: "تحويل NEAR أصلي",
+  localPreview: "معاينة محلية (بدون استدعاء ذكاء اصطناعي)",
+  riskScale: "0-30 منخفض، 31-70 مراجعة، 71-100 محظور",
+  openInGuard: "افتح في حارس الإنفاق",
+  swapPreview: "تبديل {amount} {origin} إلى {destination}. الناتج المتوقع {out}. أقصى انزلاق {slippage} bps.",
+  swapBlocked: "هذا التبديل محظور بالسياسة.",
+  injectionBlocked:
+    "تم حظر حقن الموجّه. لن يتجاهل Kotha الحدود ولن يرسل كل الأموال. الحالة BLOCKED والمخاطر 99. PROHORI_PER_TX_LIMIT_EXCEEDED و PROHORI_DAILY_BUDGET_EXCEEDED.",
 };
 
 const hi: Overlay = {
@@ -238,6 +256,15 @@ const hi: Overlay = {
   welcomeBody: "एक प्रॉम्प्ट चुनें या माइक्रोफ़ोन उपयोग करें। Kotha सादी भाषा में जवाब देता है।",
   serverSigned: "सर्वर हस्ताक्षरकर्ता ने निष्पादन भेजा।",
   micLanguage: "माइक्रोफ़ोन भाषा",
+  demoTestnet: "demo (testnet)",
+  nativeNear: "नेटिव NEAR ट्रांसफर",
+  localPreview: "स्थानीय पूर्वावलोकन (कोई AI कॉल नहीं)",
+  riskScale: "0-30 कम, 31-70 समीक्षा, 71-100 अवरुद्ध",
+  openInGuard: "खर्च गार्ड में खोलें",
+  swapPreview: "{amount} {origin} को {destination} में बदलें। अनुमानित आउटपुट {out}। अधिकतम स्लिपेज {slippage} bps।",
+  swapBlocked: "नीति ने इस स्वैप को रोक दिया।",
+  injectionBlocked:
+    "प्रॉम्प्ट इंजेक्शन रोक दिया गया। Kotha सीमाएँ नहीं भूलेगा और सारा फंड नहीं भेजेगा। BLOCKED, जोखिम 99. PROHORI_PER_TX_LIMIT_EXCEEDED और PROHORI_DAILY_BUDGET_EXCEEDED.",
 };
 
 const fr: Overlay = {
@@ -318,6 +345,15 @@ const fr: Overlay = {
   welcomeBody: "Choisissez une invite ou utilisez le micro. Kotha répond en langage clair.",
   serverSigned: "Le signataire serveur a soumis l'exécution.",
   micLanguage: "Langue du micro",
+  demoTestnet: "demo (testnet)",
+  nativeNear: "Transfert NEAR natif",
+  localPreview: "Aperçu local (aucun appel IA)",
+  riskScale: "0-30 faible, 31-70 à revoir, 71-100 bloqué",
+  openInGuard: "Ouvrir dans le garde-fou",
+  swapPreview: "Échanger {amount} {origin} contre {destination}. Sortie estimée {out}. Glissement max {slippage} bps.",
+  swapBlocked: "Cet échange est bloqué par la politique.",
+  injectionBlocked:
+    "Injection de prompt bloquée. Kotha n'ignorera pas les limites et n'enverra pas tous les fonds. Pare-feu BLOCKED, risque 99. PROHORI_PER_TX_LIMIT_EXCEEDED et PROHORI_DAILY_BUDGET_EXCEEDED.",
 };
 
 const zh: Overlay = {
@@ -398,6 +434,15 @@ const zh: Overlay = {
   welcomeBody: "选择一个提示或使用麦克风。Kotha 用自然语言回答。",
   serverSigned: "服务器签名者已提交执行。",
   micLanguage: "麦克风语言",
+  demoTestnet: "demo (testnet)",
+  nativeNear: "原生 NEAR 转账",
+  localPreview: "本地预览（未调用 AI）",
+  riskScale: "0-30 低，31-70 复核，71-100 阻止",
+  openInGuard: "在支出防护中打开",
+  swapPreview: "把 {amount} {origin} 换成 {destination}。预计得到 {out}。最大滑点 {slippage} bps。",
+  swapBlocked: "策略已阻止这笔兑换。",
+  injectionBlocked:
+    "提示注入已被阻止。Kotha 不会忽略限额，也不会转出全部资金。防火墙 BLOCKED，风险 99。PROHORI_PER_TX_LIMIT_EXCEEDED 与 PROHORI_DAILY_BUDGET_EXCEEDED。",
 };
 
 export const localeOverlays: Record<string, Overlay | undefined> = { es, ar, hi, fr, zh };

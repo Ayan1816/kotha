@@ -334,6 +334,15 @@ const en = {
   prohoriPerTx: "This transaction is over the per-transaction limit.",
   prohoriDaily: "This transaction is over the daily budget.",
   nearSettles: "Settles as wNEAR (nep141:wrap.near).",
+  demoTestnet: "demo (testnet)",
+  nativeNear: "Native NEAR transfer",
+  localPreview: "Local preview (no AI call)",
+  riskScale: "0-30 low, 31-70 review, 71-100 blocked",
+  openInGuard: "Open in Spending Guard",
+  swapPreview: "Swap {amount} {origin} to {destination}. Expected output {out}. Max slippage {slippage} bps.",
+  swapBlocked: "This swap is blocked by policy.",
+  injectionBlocked:
+    "Prompt injection blocked. Kotha will not ignore spending limits or send all funds. The AI firewall returned BLOCKED with risk 99. PROHORI_PER_TX_LIMIT_EXCEEDED — This transaction is over the per-transaction limit. PROHORI_DAILY_BUDGET_EXCEEDED — This transaction is over the daily budget.",
 } as const;
 
 export type CopyKey = keyof typeof en;
@@ -669,10 +678,26 @@ const bn: { [K in CopyKey]: string } = {
   prohoriPerTx: "এই লেনদেন প্রতি-লেনদেন সীমা ছাড়িয়েছে।",
   prohoriDaily: "এই লেনদেন দৈনিক বাজেট ছাড়িয়েছে।",
   nearSettles: "কারিগরি হিসাবে wNEAR (nep141:wrap.near)।",
+  demoTestnet: "ডেমো (টেস্টনেট)",
+  nativeNear: "নেটিভ NEAR ট্রান্সফার",
+  localPreview: "স্থানীয় প্রিভিউ (কোনো এআই কল নয়)",
+  riskScale: "০-৩০ কম, ৩১-৭০ যাচাই, ৭১-১০০ আটকানো",
+  openInGuard: "খরচ প্রহরীতে খুলুন",
+  swapPreview: "{amount} {origin} থেকে {destination} সোয়াপ। প্রত্যাশিত আউটপুট {out}। সর্বোচ্চ স্লিপেজ {slippage} bps।",
+  swapBlocked: "নীতি এই সোয়াপ আটকেছে।",
+  injectionBlocked:
+    "প্রম্পট-ইনজেকশন আটকানো হয়েছে। প্রহরী লিমিট ভোলা যাবে না। ৫০০ USDT attacker.near-এ পাঠানো ব্লক। PROHORI_PER_TX_LIMIT_EXCEEDED — এই লেনদেন প্রতি-লেনদেন সীমা ছাড়িয়েছে। PROHORI_DAILY_BUDGET_EXCEEDED — এই লেনদেন দৈনিক বাজেট ছাড়িয়েছে।",
 };
 
 export function translate(lang: Lang, key: CopyKey): string {
   if (lang === "bn") return bn[key];
   if (lang === "en") return en[key];
   return localeOverlays[lang]?.[key] ?? en[key];
+}
+
+export function fillCopy(lang: Lang, key: CopyKey, vars: Record<string, string | number>): string {
+  return translate(lang, key).replace(/\{([A-Za-z0-9_]+)\}/g, (match, name: string) => {
+    const value = vars[name];
+    return value == null ? match : String(value);
+  });
 }

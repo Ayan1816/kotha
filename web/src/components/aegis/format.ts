@@ -1,5 +1,5 @@
-import type { Lang } from "@/components/aegis/copy";
-import type { IntentAction, NetworkComponentStatus, VerifiedExecution } from "@/lib/dashboard-types";
+import { translate, type CopyKey, type Lang } from "@/components/aegis/copy";
+import type { AegisIntent, IntentAction, NetworkComponentStatus, VerifiedExecution } from "@/lib/dashboard-types";
 
 const DATE_LOCALE: Record<Lang, string> = {
   en: "en-US",
@@ -29,6 +29,48 @@ export function previewSymbol(assetId: string, action?: string): string {
   const symbol = assetLabel(assetId).symbol;
   if (symbol === "wNEAR" && action !== "swap") return "NEAR";
   return symbol;
+}
+
+const NEAR_ACCOUNT = /^[a-z0-9](?:[a-z0-9_\-.]{0,61}[a-z0-9])?\.(?:near|testnet|tg)$/i;
+
+export function isNativeNearTransfer(intent: Pick<AegisIntent, "action" | "origin_asset" | "destination_asset" | "recipient">): boolean {
+  if (intent.action !== "transfer") return false;
+  const origin = assetLabel(intent.origin_asset).symbol;
+  const destination = assetLabel(intent.destination_asset).symbol;
+  if (origin !== "wNEAR" && origin !== "NEAR") return false;
+  if (destination !== "wNEAR" && destination !== "NEAR") return false;
+  return NEAR_ACCOUNT.test(intent.recipient.trim());
+}
+
+/** Slippage is a swap quote. Plain transfers do not show the row. */
+export function showSlippageRow(intent: Pick<AegisIntent, "action">): boolean {
+  return intent.action === "swap";
+}
+
+/** The wNEAR settlement note is for intent swaps, not a native NEAR transfer. */
+export function showWnearLine(intent: Pick<AegisIntent, "action" | "origin_asset" | "destination_asset" | "recipient">): boolean {
+  if (intent.action === "transfer" || intent.action === "withdraw") return false;
+  return assetLabel(intent.origin_asset).symbol === "wNEAR";
+}
+
+export function actionCopyKey(action: string): CopyKey {
+  if (action === "swap") return "actionSwap";
+  if (action === "transfer") return "actionTransfer";
+  if (action === "withdraw") return "actionWithdraw";
+  if (action === "shield") return "actionShield";
+  if (action === "unshield") return "actionUnshield";
+  return "action";
+}
+
+export function testnetLabel(lang: Lang, value: string): string {
+  if (process.env.NEXT_PUBLIC_NETWORK === "mainnet") return value;
+  return value.replace(/\b(?:outlayer\.near|intents\.near|intents\.far)\b/g, translate(lang, "demoTestnet"));
+}
+
+export function displayRoute(lang: Lang, intent: Pick<AegisIntent, "action" | "origin_asset" | "destination_asset" | "recipient">, route: string): string {
+  const labeled = testnetLabel(lang, route);
+  if (!isNativeNearTransfer(intent)) return labeled;
+  return labeled.replace(/\bwNEAR\b/g, "NEAR");
 }
 
 export function formatAtomic(atomic: string, decimals: number): string {
