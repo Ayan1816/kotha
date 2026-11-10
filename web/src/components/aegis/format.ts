@@ -24,6 +24,13 @@ export function assetLabel(assetId: string): { symbol: string; decimals: number 
   return { symbol: tail, decimals: assetId.includes("wrap.near") ? 24 : 6 };
 }
 
+/** Card symbol. Plain NEAR transfers display NEAR; wNEAR stays in the route line. Swaps keep wNEAR. */
+export function previewSymbol(assetId: string, action?: string): string {
+  const symbol = assetLabel(assetId).symbol;
+  if (symbol === "wNEAR" && action !== "swap") return "NEAR";
+  return symbol;
+}
+
 export function formatAtomic(atomic: string, decimals: number): string {
   const negative = atomic.startsWith("-");
   const digits = (negative ? atomic.slice(1) : atomic).replace(/\D/g, "");

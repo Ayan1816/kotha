@@ -130,6 +130,24 @@ export async function postTranslate(body: { text: string; target: "bn" | "en"; a
   return data.text.trim();
 }
 
+export async function postTranslateMany(body: { texts: string[]; target: "bn" | "en"; accountId?: string }): Promise<string[]> {
+  const { accountId, texts, target } = body;
+  const response = await fetch("/api/translate", {
+    method: "POST",
+    credentials: "include",
+    headers: aiHeaders({ "content-type": "application/json" }, accountId),
+    body: JSON.stringify({ texts, target }),
+  });
+  const data = await readJson(response);
+  if (!response.ok) throw fail(data, response.status);
+  if (!isRecord(data) || !Array.isArray(data.texts) || data.texts.length !== texts.length) {
+    throw new DeckRequestError("translate_failed", "Translation failed.");
+  }
+  const translated = data.texts.map((item) => (typeof item === "string" ? item.trim() : ""));
+  if (translated.some((item) => !item)) throw new DeckRequestError("translate_failed", "Translation failed.");
+  return translated;
+}
+
 export async function postTeeChatStream(
   body: { message: string; model: string; autoRedact: boolean; locale?: string; accountId?: string },
   handlers: { onStep?: (step: LoaderStep) => void; onDelta?: (text: string) => void; onDone?: () => void } = {},

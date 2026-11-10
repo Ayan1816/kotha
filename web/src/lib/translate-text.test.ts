@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { MAX_REPLY_TOKENS } from "./ai-rate-limit";
-import { translateSystemPrompt, translateText } from "./translate-text";
+import { translateMany, translateSystemPrompt, translateText } from "./translate-text";
 
 const URL = "https://cloud-api.near.ai/v1/chat/completions";
 
@@ -73,6 +73,7 @@ test("translateText talks to the chat model in both directions and retries once"
     model: "deepseek/deepseek-v3.2",
     baseUrl: "https://cloud-api.near.ai/v1",
     fetchImpl: retrying,
+    wait: async () => {},
   });
   assert.equal(retried, "retry ok");
   assert.equal(attempts, 2);
@@ -94,20 +95,118 @@ test("translateText talks to the chat model in both directions and retries once"
     model: "deepseek/deepseek-v3.2",
     baseUrl: "https://cloud-api.near.ai/v1",
     fetchImpl: flaky,
+    wait: async () => {},
   });
   assert.equal(recovered, "after timeout");
 
-  const failing: typeof fetch = async () => new Response("down", { status: 500 });
+  const waits: number[] = [];
+  let failures = 0;
+  const failing: typeof fetch = async () => {
+    failures += 1;
+    return new Response("down", { status: 500 });
+  };
   await assert.rejects(
     () =>
       translateText({
-        text: "hello",
+        text: "never-cached-phrase",
         target: "en",
         apiKey: "test-key",
         model: "deepseek/deepseek-v3.2",
         baseUrl: "https://cloud-api.near.ai/v1",
         fetchImpl: failing,
+        wait: async (ms) => {
+          waits.push(ms);
+        },
       }),
     /NEAR AI chat returned HTTP 500\./,
   );
+  assert.equal(failures, 3);
+  assert.deepEqual(waits, [400, 800]);
+});
+
+test("translateText logs upstream failures, serves a cached line, and dedupes", async () => {
+  const logged: string[] = [];
+  const original = console.error;
+  console.error = (...args: unknown[]) => {
+    logged.push(args.map((item) => String(item)).join(" "));
+  };
+  try {
+    let hits = 0;
+    const fetchImpl: typeof fetch = async () => {
+      hits += 1;
+      if (hits === 1) return ok(sse("cached line"));
+      return new Response("secret-body test-key", { status: 502 });
+    };
+    const first = await translateText({
+      text: "cache-me",
+      target: "bn",
+      apiKey: "test-key",
+      model: "deepseek/deepseek-v3.2",
+      baseUrl: "https://cloud-api.near.ai/v1",
+      fetchImpl,
+      wait: async () => {},
+    });
+    const second = await translateText({
+      text: "cache-me",
+      target: "bn",
+      apiKey: "test-key",
+      model: "deepseek/deepseek-v3.2",
+      baseUrl: "https://cloud-api.near.ai/v1",
+      fetchImpl,
+      wait: async () => {},
+    });
+    assert.equal(first, "cached line");
+    assert.equal(second, "cached line");
+    assert.equal(hits, 4);
+    const joined = logged.join("\n");
+    assert.match(joined, /upstream 502/);
+    assert.match(joined, /secret-body/);
+    assert.equal(joined.includes("test-key"), false);
+
+    let shared = 0;
+    const slow: typeof fetch = async () => {
+      shared += 1;
+      await new Promise((resolve) => setTimeout(resolve, 20));
+      return ok(sse("shared"));
+    };
+    const args = {
+      text: "dedupe-key",
+      target: "en" as const,
+      apiKey: "test-key",
+      model: "deepseek/deepseek-v3.2",
+      baseUrl: "https://cloud-api.near.ai/v1",
+      fetchImpl: slow,
+      wait: async () => {},
+    };
+    const [left, right] = await Promise.all([translateText(args), translateText(args)]);
+    assert.equal(left, "shared");
+    assert.equal(right, "shared");
+    assert.equal(shared, 1);
+  } finally {
+    console.error = original;
+  }
+});
+
+test("translateMany sends one numbered request and reuses identical lines", async () => {
+  let calls = 0;
+  const fetchImpl: typeof fetch = async (_input, init) => {
+    calls += 1;
+    const body = JSON.parse(String(init?.body ?? "{}")) as { messages?: Array<{ content?: string }> };
+    const user = body.messages?.[1]?.content ?? "";
+    assert.match(user, /\[0\] alpha/);
+    assert.match(user, /\[1\] beta/);
+    assert.equal(user.includes("[2]"), false);
+    return ok(sse("[0] ALPHA\n[1] BETA"));
+  };
+  const translated = await translateMany({
+    texts: ["alpha", "alpha", "beta"],
+    target: "en",
+    apiKey: "test-key",
+    model: "deepseek/deepseek-v3.2",
+    baseUrl: "https://cloud-api.near.ai/v1",
+    fetchImpl,
+    wait: async () => {},
+  });
+  assert.deepEqual(translated, ["ALPHA", "ALPHA", "BETA"]);
+  assert.equal(calls, 1);
 });

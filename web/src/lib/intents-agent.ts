@@ -575,7 +575,7 @@ export function previewIntent(intent: AegisIntent, policy: ActivePolicy, balance
   const slippageBps =
     intent.action === "swap"
       ? clamp(intent.max_slippage_bps > 0 ? intent.max_slippage_bps : 50, 1, 1000)
-      : clamp(intent.max_slippage_bps, 0, 1000);
+      : 0;
 
   let expectedOut = notional.humanNumber;
   let rate = 1;

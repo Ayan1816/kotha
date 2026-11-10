@@ -21,10 +21,19 @@ export function isRejectionTemplate(text: string): boolean {
 }
 
 export function questionFallback(locale: string): string {
-  if (locale === "bn") {
-    return "NEAR একটি লেয়ার-১ ব্লকচেইন। ব্যালেন্স জানতে ওয়ালেট যুক্ত করুন। কোনো লেনদেন চাইলে কাজ ও পরিমাণ বলুন।";
-  }
-  return "NEAR is a layer-1 blockchain. Connect a wallet to read a balance. Name an action and an amount when you want a transaction.";
+  if (locale === "bn") return "NEAR একটি লেয়ার-১ ব্লকচেইন।";
+  return "NEAR is a layer-1 blockchain.";
+}
+
+export function asksAboutBalance(text: string): boolean {
+  return /wallet|balance|ওয়ালেট|ব্যালেন্স|ব্যালান্স/i.test(text);
+}
+
+function withoutWalletBalance(text: string): string {
+  const kept = text
+    .split(/(?<=[.!?।])\s+/)
+    .filter((part) => !asksAboutBalance(part));
+  return kept.join(" ").trim();
 }
 
 export type QuestionAnswer = {
@@ -36,11 +45,15 @@ export type QuestionAnswer = {
 };
 
 /** Keep a real model answer. Replace the swap/transfer/withdraw rejection menu. */
-export function answerAsQuestion(modelText: string | null | undefined, locale: string): QuestionAnswer {
+export function answerAsQuestion(modelText: string | null | undefined, locale: string, userMessage?: string): QuestionAnswer {
   const text = modelText?.trim() || "";
   const usable = text.length > 0 && !isRejectionTemplate(text);
+  let explanation = usable ? text : questionFallback(locale);
+  if (usable && userMessage != null && !asksAboutBalance(userMessage)) {
+    explanation = withoutWalletBalance(explanation) || questionFallback(locale);
+  }
   return {
-    explanation: usable ? text : questionFallback(locale),
+    explanation,
     risk_score: 5,
     policy_status: "PASS",
     policy_reason: "QUESTION",

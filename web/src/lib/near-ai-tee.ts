@@ -4,7 +4,7 @@ import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { keccak_256 } from "@noble/hashes/sha3.js";
 import { MAX_REPLY_TOKENS } from "./ai-rate-limit";
 import { extractE164, wantsConfidential } from "./near-account";
-import { redactSensitiveText } from "./pii-redact";
+import { redactDeterministic, redactSensitiveText } from "./pii-redact";
 import { answerAsQuestion, isGeneralQuestion, normalizeVoiceSpelling } from "./question-intent";
 import { directedRecipient, foldDigits, messageTransferTarget, parseAmountToken, readTransferFields, type TransferFields } from "./transfer-parse";
 export { parseTransferCommand, type ParsedTransfer } from "./transfer-parse";
@@ -110,6 +110,7 @@ const EVIDENCE_TIMEOUT_MS = 15_000;
 const EVIDENCE_RETRIES = 1;
 const PRIVACY_TIMEOUT_MS = 8_000;
 const PIPELINE_TIMEOUT_MS = 45_000;
+const ATTESTATION_REPORT_TTL_MS = 10 * 60 * 1000;
 
 export const CHAT_LOCALES = ["en", "bn", "es", "ar", "hi", "fr", "zh"] as const;
 export type ChatLocale = (typeof CHAT_LOCALES)[number];
@@ -171,6 +172,7 @@ function systemPrompt(locale: ChatLocale, userMessage = ""): string {
     "amount is a decimal string in human token units, not atomic units.",
     "confidential is true only when the user explicitly says private, confidential, or গোপন, and for a shield into the private vault. A NEAR account recipient is a public transfer. An E.164 phone number is a remittance transfer and stays public unless those words are present. Never ask for a phone number when the recipient is a NEAR account id (name.near, name.testnet, or 64-hex implicit account), and never use INVALID_RECIPIENT_FORMAT for that account.",
     "Never invent balances or token amounts. Mention the wallet only when the user asks about a balance or requests a swap, transfer, withdraw, shield, or unshield. Do not start any other answer with a wallet notice.",
+    "A general question must not mention a wallet, connecting a wallet, or any token balance.",
     "If balanceAvailable is false and the user asked for a balance or a transaction, say the balance is unchecked until a wallet is connected. If a NEAR balance is present, use only that figure and do not mention any other token balance.",
     'If the user did not name an action, set action to "none", amount to 0, intent to null, and policy_status to PASS, then answer the question. Never say you could not understand the message, and never reply with only a swap/transfer/withdraw menu.',
     "Shield and unshield move the agent's own balance between intents.near and intents.far. They still count toward today's spend.",
@@ -249,6 +251,13 @@ export async function runAttestedInference(params: {
   const model = resolveModel(params.model);
   const apiKey = nearAiApiKey(params.apiKey);
   const locale = normalizeChatLocale(params.locale);
+  if (shouldSkipModel(params.userMessage)) return fastLocalPreview(params, model, locale);
+  const reportTask = apiKey
+    ? cachedAttestationReport(model, apiKey).catch((error: unknown) => {
+        if (params.signal?.aborted) throw error;
+        return { json: null, error: errorText(error), nonce: "" };
+      })
+    : null;
   const redaction = params.autoRedact ? await redactPII(params.userMessage, apiKey, params.signal) : null;
   if (params.signal?.aborted) throw params.signal.reason instanceof Error ? params.signal.reason : new Error("Request timed out. Please try again.");
   const modelMessage = redaction?.redactedText ?? params.userMessage;
@@ -337,6 +346,8 @@ export async function runAttestedInference(params: {
     });
   }
   params.onStep?.("verifying");
+  const prefetchedReport = reportTask ? await reportTask : null;
+  if (params.signal?.aborted) throw params.signal.reason instanceof Error ? params.signal.reason : new Error("Request timed out. Please try again.");
   return attestHardware({
     ...shared,
     apiKey,
@@ -344,6 +355,7 @@ export async function runAttestedInference(params: {
     bodySha256: chat.bodySha256,
     chatStatus: chat.status,
     signal: params.signal,
+    prefetchedReport,
   });
 }
 
@@ -465,6 +477,7 @@ async function attestHardware(args: {
   bodySha256: string;
   chatStatus: number;
   signal?: AbortSignal;
+  prefetchedReport?: { json: unknown; error: string | null; nonce: string } | null;
 }): Promise<AttestedInference> {
   const chatJson = interpretChatBody(args.responseText);
   const content = extractAssistantContent(chatJson);
@@ -483,7 +496,7 @@ async function attestHardware(args: {
   const completionHash = sha256Hex(JSON.stringify(chatJson));
   const responseCandidates = uniqueHashes([rawHash, sha256Hex(args.responseText), contentHash, completionHash]);
   const chatId = extractString(chatJson, ["id", "chat_id", "chatId"]);
-  const nonce = randomBytes(32).toString("hex");
+  const nonce = args.prefetchedReport?.nonce || randomBytes(32).toString("hex");
   if (!chatId) {
     return packInference({
       ...args,
@@ -508,12 +521,14 @@ async function attestHardware(args: {
       "signature",
       args.signal,
     ),
-    fetchEvidence(
-      `${base}/attestation/report?model=${encodeURIComponent(args.model)}&signing_algo=ecdsa&nonce=${nonce}`,
-      args.apiKey,
-      "attestation",
-      args.signal,
-    ),
+    args.prefetchedReport
+      ? Promise.resolve({ json: args.prefetchedReport.json, error: args.prefetchedReport.error })
+      : fetchEvidence(
+          `${base}/attestation/report?model=${encodeURIComponent(args.model)}&signing_algo=ecdsa&nonce=${nonce}`,
+          args.apiKey,
+          "attestation",
+          args.signal,
+        ),
   ]);
   const checked = verifyCloudEvidence({
     requestSha256: args.requestSha256,
@@ -644,6 +659,71 @@ function isScriptedKothaPrompt(text: string): boolean {
   return false;
 }
 
+function shouldSkipModel(message: string): boolean {
+  if (isAdversarial(foldPrompt(message))) return true;
+  return isDeterministicCommand(message);
+}
+
+/** Transfer or withdraw whose amount, token, and recipient are already in the text. */
+export function isDeterministicCommand(message: string): boolean {
+  if (isGeneralQuestion(message)) return false;
+  const folded = foldPrompt(message);
+  if (isAdversarial(folded)) return false;
+  const action = detectAction(folded);
+  if (action !== "transfer" && action !== "withdraw") return false;
+  const parsed = parseAmountToken(folded);
+  if (!parsed?.amount || !parsed.token) return false;
+  if (action === "withdraw") return Boolean(detectRecipient(folded, "withdraw"));
+  const target = messageTransferTarget(folded);
+  return Boolean(target.account || target.phone);
+}
+
+function fastLocalPreview(
+  params: Parameters<typeof runAttestedInference>[0],
+  model: string,
+  locale: ChatLocale,
+): AttestedInference {
+  const local = params.autoRedact === false ? null : redactDeterministic(params.userMessage);
+  const redaction: RedactionResult | null = local
+    ? {
+        originalLength: params.userMessage.length,
+        redactedText: local.text,
+        redactionsCount: local.count,
+        piiTypesFound: [...local.types],
+      }
+    : null;
+  const request = buildChatRequest(
+    model,
+    redaction?.redactedText ?? params.userMessage,
+    params.policyContext,
+    params.balancesContext,
+    locale,
+  );
+  const decision = resolveDecision(params.userMessage, params.policyContext, params.balancesContext, redaction, null, null, locale);
+  const responseText = JSON.stringify(decision);
+  if (decision.explanation) params.onDelta?.(decision.explanation);
+  params.onStep?.("thinking");
+  params.onStep?.("verifying");
+  params.onStep?.("policy");
+  return packInference({
+    model,
+    request,
+    requestSha256: sha256Hex(JSON.stringify(request)),
+    redaction,
+    decision,
+    rawResponseText: responseText,
+    responseSha256: sha256Hex(responseText),
+    chatId: "",
+    nonce: "",
+    signature: "",
+    signing_address: "",
+    intel_quote: "",
+    nvidia_payload: "",
+    verification: { status: "unverified", reason: "Deterministic preview. The model was not called." },
+    hardware: null,
+  });
+}
+
 function resolveDecision(
   userMessage: string,
   policyContext: unknown,
@@ -655,7 +735,7 @@ function resolveDecision(
 ): CopilotDecision {
   const local = decideLocally(userMessage, policyContext, balancesContext, redaction, locale);
   if (isScriptedKothaPrompt(foldPrompt(userMessage))) return local;
-  if (isGeneralQuestion(userMessage)) return answerAsQuestion(modelDecision?.explanation, locale);
+  if (isGeneralQuestion(userMessage)) return answerAsQuestion(modelDecision?.explanation, locale, userMessage);
   const guarded = guardTransferCommand(
     userMessage,
     rawIntent ?? modelDecision?.intent ?? local.intent,
@@ -773,7 +853,29 @@ function explanationFor(
 ): string {
   if (status === "NEEDS_WALLET") return needsWalletLine(locale, folded);
   if (status === "INSUFFICIENT_BALANCE") return insufficientLine(locale, folded);
-  return bilingualExplanation(folded, intent, preview, status, assumedAmount, redactionNote, locale);
+  return withProhoriSentence(bilingualExplanation(folded, intent, preview, status, assumedAmount, redactionNote, locale), locale);
+}
+
+function withProhoriSentence(text: string, locale: ChatLocale): string {
+  if (locale !== "bn" || !text.includes("PROHORI_")) return text;
+  let next = text;
+  if (next.includes("PROHORI_PER_TX_LIMIT_EXCEEDED") && !next.includes("প্রতি-লেনদেন সীমা")) {
+    next += " এই লেনদেন প্রতি-লেনদেন সীমা ছাড়িয়েছে।";
+  }
+  if (next.includes("PROHORI_DAILY_BUDGET_EXCEEDED") && !next.includes("দৈনিক বাজেট ছাড়িয়েছে")) {
+    next += " এই লেনদেন দৈনিক বাজেট ছাড়িয়েছে।";
+  }
+  return next;
+}
+
+function statusWord(status: PolicyStatus, locale: ChatLocale): string {
+  if (locale !== "bn") return status;
+  if (status === "BLOCKED") return "আটকানো";
+  if (status === "PASS") return "পাস";
+  if (status === "WARNING") return "সতর্কতা";
+  if (status === "NEEDS_WALLET") return "ওয়ালেট দরকার";
+  if (status === "INSUFFICIENT_BALANCE") return "অপর্যাপ্ত ব্যালেন্স";
+  return status;
 }
 
 function reasonFor(status: PolicyStatus, intent: AegisIntent, preview: DryRunPreview): string {
@@ -837,7 +939,7 @@ function decideLocally(
   const balances = normalizeBalancesContext(balancesContext);
   const folded = foldPrompt(userMessage);
   if (isAdversarial(folded)) return adversarialDecision(policy, balances, locale, hasBengali(userMessage));
-  if (isGeneralQuestion(userMessage)) return answerAsQuestion(null, locale);
+  if (isGeneralQuestion(userMessage)) return answerAsQuestion(null, locale, userMessage);
   const drafted = parseUserIntent(folded);
   if (!drafted) {
     return {
@@ -883,7 +985,7 @@ function adversarialDecision(
   };
   const preview = previewIntent(intent, policy, balances);
   const bangla =
-    "প্রম্পট-ইনজেকশন আটকানো হয়েছে। প্রহরী লিমিট ভোলা যাবে না। ৫০০ USDT attacker.near-এ পাঠানো ব্লক। PROHORI_PER_TX_LIMIT_EXCEEDED এবং PROHORI_DAILY_BUDGET_EXCEEDED।";
+    "প্রম্পট-ইনজেকশন আটকানো হয়েছে। প্রহরী লিমিট ভোলা যাবে না। ৫০০ USDT attacker.near-এ পাঠানো ব্লক। PROHORI_PER_TX_LIMIT_EXCEEDED — এই লেনদেন প্রতি-লেনদেন সীমা ছাড়িয়েছে। PROHORI_DAILY_BUDGET_EXCEEDED — এই লেনদেন দৈনিক বাজেট ছাড়িয়েছে।";
   const localized = blockedExplanation(locale);
   const explanation = locale === "en" && userWroteBengali ? `${localized} ${bangla}` : locale === "bn" ? bangla : localized;
   return {
@@ -911,7 +1013,7 @@ function blockedExplanation(locale: ChatLocale): string {
   if (locale === "zh") {
     return "提示注入已被阻止。Kotha 不会忽略限额，也不会转出全部资金。防火墙 BLOCKED，风险 99。PROHORI_PER_TX_LIMIT_EXCEEDED 与 PROHORI_DAILY_BUDGET_EXCEEDED。";
   }
-  return "Prompt injection blocked. Kotha will not ignore spending limits or send all funds. The AI firewall returned BLOCKED with risk 99. PROHORI_PER_TX_LIMIT_EXCEEDED and PROHORI_DAILY_BUDGET_EXCEEDED.";
+  return "Prompt injection blocked. Kotha will not ignore spending limits or send all funds. The AI firewall returned BLOCKED with risk 99. PROHORI_PER_TX_LIMIT_EXCEEDED — This transaction is over the per-transaction limit. PROHORI_DAILY_BUDGET_EXCEEDED — This transaction is over the daily budget.";
 }
 
 function bilingualExplanation(
@@ -924,20 +1026,21 @@ function bilingualExplanation(
   locale: ChatLocale,
 ): string {
   const english = `${explainIntent(intent, preview, status, assumedAmount)}${redactionNote}`;
+  const word = statusWord(status, "bn");
   if (!replyUsesBengali(locale, folded)) {
     if (locale !== "en" && locale !== "bn" && !/[A-Za-z]{2,}/.test(folded)) return localLine(locale, intent, status) || english;
     return english;
   }
   if (/রেমিট্যান্স|প্রবাসী/.test(folded) && intent.action === "transfer" && intent.confidential) {
-    return `প্রবাসী রেমিট্যান্স: বাড়িতে ${intent.amount} USDT পাঠানো হচ্ছে। ফোন [REDACTED_PHONE] এবং ইমেইল [REDACTED_EMAIL] openai/privacy-filter দিয়ে লুকানো হয়েছে। গোপন ট্রান্সফার intents.far-এ। Confidential remittance of ${intent.amount} USDT (nep141:usdt.tether-token.near) on intents.far. Phone and email were redacted to [REDACTED_PHONE] and [REDACTED_EMAIL]. Policy ${status}. ${preview.warnings.join(" ")}`.trim();
+    return `প্রবাসী রেমিট্যান্স: বাড়িতে ${intent.amount} USDT পাঠানো হচ্ছে। ফোন [REDACTED_PHONE] এবং ইমেইল [REDACTED_EMAIL] openai/privacy-filter দিয়ে লুকানো হয়েছে। গোপন ট্রান্সফার intents.far-এ। নীতি: ${word}। Confidential remittance of ${intent.amount} USDT (nep141:usdt.tether-token.near) on intents.far. Phone and email were redacted to [REDACTED_PHONE] and [REDACTED_EMAIL]. Policy ${status}. ${preview.warnings.join(" ")}`.trim();
   }
   if (intent.action === "shield") {
-    return `${intent.amount} USDT গোপন ভল্ট intents.far-এ রাখা হচ্ছে। Shield ${intent.amount} USDT (nep141:usdt.tether-token.near) into intents.far. Policy ${status}. ${english}`;
+    return `${intent.amount} USDT গোপন ভল্ট intents.far-এ রাখা হচ্ছে। নীতি: ${word}। Shield ${intent.amount} USDT (nep141:usdt.tether-token.near) into intents.far. Policy ${status}. ${english}`;
   }
   if (intent.action === "swap") {
-    return `${intent.amount} wNEAR (nep141:wrap.near) দিয়ে USDT (nep141:usdt.tether-token.near) কেনা হচ্ছে। নীতি: ${status}। Swap ${intent.amount} wNEAR (nep141:wrap.near) to USDT (nep141:usdt.tether-token.near). Policy ${status}. ${english}`;
+    return `${intent.amount} wNEAR (nep141:wrap.near) দিয়ে USDT (nep141:usdt.tether-token.near) কেনা হচ্ছে। নীতি: ${word}। Swap ${intent.amount} wNEAR (nep141:wrap.near) to USDT (nep141:usdt.tether-token.near). Policy ${status}. ${english}`;
   }
-  return `${english} বাংলা নীতি: ${status}।`;
+  return `${english} বাংলা নীতি: ${word}।`;
 }
 
 function parseUserIntent(message: string): { intent: AegisIntent; assumedAmount: boolean } | null {
@@ -1069,9 +1172,15 @@ function detectSlippage(text: string, action: IntentAction): number {
   return action === "swap" ? 50 : 0;
 }
 
+function spokenSymbol(assetId: string, action: IntentAction): string {
+  const symbol = assetMeta(assetId).symbol;
+  if (symbol === "wNEAR" && action !== "swap") return "NEAR";
+  return symbol;
+}
+
 function explainIntent(intent: AegisIntent, preview: DryRunPreview, status: PolicyStatus, assumedAmount: boolean): string {
-  const origin = assetMeta(intent.origin_asset).symbol;
-  const destination = assetMeta(intent.destination_asset).symbol;
+  const origin = spokenSymbol(intent.origin_asset, intent.action);
+  const destination = spokenSymbol(intent.destination_asset, intent.action);
   const assumption = assumedAmount ? " The size defaulted to 1 because the message did not name an amount." : "";
   if (status === "BLOCKED") {
     return `${title(intent.action)} of ${intent.amount} ${origin} (~$${preview.budgetImpact.txUsd.toFixed(2)}) is blocked. ${warningText(preview.warnings)}${assumption}`;
@@ -1120,11 +1229,11 @@ function localLine(locale: ChatLocale, intent: AegisIntent, status: PolicyStatus
   const action = intent.action;
   const lines: Record<string, Record<string, string>> = {
     bn: {
-      swap: `${amount} NEAR থেকে USDT সোয়াপ। নীতি ${status}।`,
-      transfer: `${amount} পাঠানো হচ্ছে। নীতি ${status}।`,
-      shield: `${amount} USDT গোপন ভল্টে। নীতি ${status}।`,
-      withdraw: `${amount} উত্তোলন। নীতি ${status}।`,
-      unshield: `${amount} আনশিল্ড। নীতি ${status}।`,
+      swap: `${amount} NEAR থেকে USDT সোয়াপ। নীতি ${statusWord(status, "bn")}।`,
+      transfer: `${amount} পাঠানো হচ্ছে। নীতি ${statusWord(status, "bn")}।`,
+      shield: `${amount} USDT গোপন ভল্টে। নীতি ${statusWord(status, "bn")}।`,
+      withdraw: `${amount} উত্তোলন। নীতি ${statusWord(status, "bn")}।`,
+      unshield: `${amount} আনশিল্ড। নীতি ${statusWord(status, "bn")}।`,
     },
     es: {
       swap: `Cambiar ${amount} NEAR a USDT. Política ${status}.`,
@@ -1288,6 +1397,38 @@ async function fetchChatText(
   text += decoder.decode();
   if (text) onText?.(text);
   return { status: response.status, text, bodySha256: sha256Bytes(concatBytes(chunks)) };
+}
+
+type CachedReport = { at: number; json: unknown; nonce: string };
+const reportCache = new Map<string, CachedReport>();
+const reportInflight = new Map<string, Promise<{ json: unknown; error: string | null; nonce: string }>>();
+
+async function cachedAttestationReport(model: string, apiKey: string): Promise<{ json: unknown; error: string | null; nonce: string }> {
+  const hit = reportCache.get(model);
+  if (hit && Date.now() - hit.at < ATTESTATION_REPORT_TTL_MS) {
+    return { json: hit.json, error: null, nonce: hit.nonce };
+  }
+  const pending = reportInflight.get(model);
+  if (pending) return pending;
+  const nonce = randomBytes(32).toString("hex");
+  const job = (async () => {
+    const base = nearAiBaseUrl();
+    const result = await fetchEvidence(
+      `${base}/attestation/report?model=${encodeURIComponent(model)}&signing_algo=ecdsa&nonce=${nonce}`,
+      apiKey,
+      "attestation",
+    );
+    if (!result.error && collectReportEntries(result.json).length > 0) {
+      reportCache.set(model, { at: Date.now(), json: result.json, nonce });
+    }
+    return { json: result.json, error: result.error, nonce };
+  })();
+  reportInflight.set(model, job);
+  try {
+    return await job;
+  } finally {
+    reportInflight.delete(model);
+  }
 }
 
 async function fetchEvidence(

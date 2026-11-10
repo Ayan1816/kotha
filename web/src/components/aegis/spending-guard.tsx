@@ -1,14 +1,16 @@
 "use client";
 
-import { DryRunChecks, QuoteBody, dryRunLabel, dryRunTone } from "@/components/aegis/audit-panel";
+import { DryRunChecks, QuoteBody, dryRunIsBlocked, dryRunIsPass, dryRunLabel, dryRunTone, formatWarning } from "@/components/aegis/audit-panel";
 import { translate, type Lang } from "@/components/aegis/copy";
 import type { AegisIntent, ActivePolicy, DryRunPreview } from "@/lib/dashboard-types";
+import { useId } from "react";
 
 export function SpendingGuard({
   lang,
   policy,
   frozen,
   ownerLock,
+  ownerReady,
   quoteBusy,
   executeBusy,
   freezeBusy,
@@ -25,6 +27,7 @@ export function SpendingGuard({
   policy: ActivePolicy;
   frozen: boolean;
   ownerLock: string | null;
+  ownerReady: boolean;
   quoteBusy: boolean;
   executeBusy: boolean;
   freezeBusy: boolean;
@@ -40,8 +43,11 @@ export function SpendingGuard({
   const limit = policy.dailyBudgetUsd > 0 ? policy.dailyBudgetUsd : 1;
   const used = Math.max(0, Math.min(100, (policy.spentTodayUsd / limit) * 100));
   const dryTitle = intent ? undefined : translate(lang, "noIntentReason");
-  const executeTitle = ownerLock || executeReason || undefined;
+  const policyBlocked = dryRunIsBlocked(dryRun);
+  const canExecute = ownerReady && dryRunIsPass(dryRun) && !executeReason;
+  const executeTip = canExecute ? undefined : !ownerReady ? translate(lang, "connectOwner") : translate(lang, "blockedByPolicy");
   const freezeTitle = ownerLock || undefined;
+  const blockedLine = dryRun?.warnings[0] ? formatWarning(lang, dryRun.warnings[0]) : translate(lang, "blockedByPolicy");
 
   return (
     <section className="rounded-2xl border border-white/10 bg-[#07110d] p-6 shadow-[0_16px_40px_rgba(0,0,0,0.35)]">
@@ -62,9 +68,15 @@ export function SpendingGuard({
         </p>
       ) : null}
       {intent && dryRun ? <DryRunCard lang={lang} dryRun={dryRun} /> : null}
-      <div className="mt-6 flex flex-wrap gap-2">
-        <GuardButton label={translate(lang, "dryRun")} title={dryTitle} busy={quoteBusy} disabled={Boolean(dryTitle)} onClick={onDryRun} tone="ghost" />
-        <GuardButton label={translate(lang, "executeButton")} title={executeTitle} busy={executeBusy} disabled={Boolean(executeTitle)} onClick={onExecute} tone="primary" />
+      <div className="mt-6 flex flex-wrap items-center gap-2">
+        {policyBlocked ? (
+          <p className="text-sm text-[#ffb3c0]">{blockedLine}</p>
+        ) : (
+          <>
+            <GuardButton label={translate(lang, "dryRun")} title={dryTitle} busy={quoteBusy} disabled={Boolean(dryTitle)} onClick={onDryRun} tone="ghost" />
+            <GuardButton label={translate(lang, "executeButton")} title={executeTip} busy={executeBusy} disabled={!canExecute} onClick={onExecute} tone="primary" />
+          </>
+        )}
         <GuardButton
           label={frozen ? translate(lang, "unfreeze") : translate(lang, "freezeButton")}
           title={freezeTitle}
@@ -106,7 +118,7 @@ function DryRunCard({ lang, dryRun }: { lang: Lang; dryRun: DryRunPreview }) {
       <p className="mt-1 text-sm text-white/80">
         {translate(lang, "remainingLimit")} ${remaining.toFixed(2)}
       </p>
-      {warning ? <p className="mt-2 text-sm text-[#ffd7a1]">{warning}</p> : null}
+      {warning ? <p className="mt-2 text-sm text-[#ffd7a1]">{formatWarning(lang, warning)}</p> : null}
     </div>
   );
 }
@@ -139,20 +151,28 @@ function GuardButton({
   onClick: () => void;
   tone: "primary" | "ghost" | "danger";
 }) {
+  const reasonId = useId();
   const toneClass =
     tone === "primary"
-      ? "bg-[#00EC97] text-[#04140d]"
+      ? "bg-[#00EC97] text-[#04140d] disabled:bg-[#2a3038] disabled:text-white/45 disabled:opacity-100"
       : tone === "danger"
         ? "border border-[#FF3B5C]/60 text-[#ffb3c0]"
         : "border border-white/15 text-white";
+  const disabledClass = tone === "primary" ? "disabled:cursor-not-allowed" : "disabled:cursor-not-allowed disabled:opacity-40";
   return (
     <span title={title} className="inline-flex">
+      {title ? (
+        <span id={reasonId} className="sr-only">
+          {title}
+        </span>
+      ) : null}
       <button
         type="button"
         disabled={disabled || busy}
         title={title}
+        aria-describedby={title ? reasonId : undefined}
         onClick={onClick}
-        className={`h-10 rounded-xl px-4 text-sm font-semibold disabled:cursor-not-allowed disabled:opacity-40 ${toneClass}`}
+        className={`h-10 rounded-xl px-4 text-sm font-semibold ${disabledClass} ${toneClass}`}
       >
         {busy ? "…" : label}
       </button>

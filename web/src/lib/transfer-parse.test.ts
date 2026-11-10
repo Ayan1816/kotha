@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { previewIntent, type ActivePolicy } from "./intents-agent";
-import { guardTransferCommand } from "./near-ai-tee";
-import { answerAsQuestion, isGeneralQuestion, normalizeVoiceSpelling } from "./question-intent";
+import { guardTransferCommand, isDeterministicCommand } from "./near-ai-tee";
+import { answerAsQuestion, asksAboutBalance, isGeneralQuestion, normalizeVoiceSpelling, questionFallback } from "./question-intent";
 import { parseTransferCommand } from "./transfer-parse";
 
 const policy: ActivePolicy = {
@@ -271,4 +272,53 @@ test("general questions are not rejected as transfers", () => {
   assert.equal(/couldn'?t understand/i.test(rejected.explanation), false);
   assert.equal(/swap\/transfer\/withdraw/i.test(rejected.explanation), false);
   assert.equal(answerAsQuestion("NEAR is a layer-1 blockchain.", "bn").explanation, "NEAR is a layer-1 blockchain.");
+  assert.equal(/wallet|balance/i.test(questionFallback("en")), false);
+  assert.equal(/ওয়ালেট|ব্যালেন্স|ব্যালান্স/.test(questionFallback("bn")), false);
+  const stripped = answerAsQuestion("NEAR is a layer-1 blockchain. Connect a wallet to read a balance.", "en", "what is near");
+  assert.match(stripped.explanation, /layer-1/);
+  assert.equal(/wallet|balance/i.test(stripped.explanation), false);
+  const kept = answerAsQuestion("Your balance is 2 NEAR.", "en", "what is my balance");
+  assert.match(kept.explanation, /balance/i);
+  assert.equal(asksAboutBalance("what is my balance"), true);
+});
+
+test("plain NEAR transfers show NEAR with zero slippage and skip the model", () => {
+  const guarded = guardTransferCommand(
+    "Send 0.01 NEAR to alice.testnet",
+    { action: "transfer", max_slippage_bps: 50 },
+    policy,
+    nearBook,
+    "en",
+  );
+  assert.ok(guarded);
+  assert.match(guarded.explanation, /0\.01 NEAR/);
+  assert.equal(/wNEAR/.test(guarded.explanation), false);
+  assert.equal(guarded.preview.quote.slippageBps, 0);
+  assert.match(guarded.preview.quote.route, /wNEAR/);
+  assert.equal(guarded.intent.origin_asset, "nep141:wrap.near");
+  assert.equal(isDeterministicCommand("Send 0.01 NEAR to alice.testnet"), true);
+  assert.equal(isDeterministicCommand("alice.testnet কে 0.01 NEAR পাঠাও"), true);
+  assert.equal(isDeterministicCommand("withdraw 1 NEAR"), true);
+  assert.equal(isDeterministicCommand("what is near"), false);
+  assert.equal(isDeterministicCommand("Buy USDT with 2 NEAR"), false);
+  assert.equal(isDeterministicCommand("Put 5 USDT in the private vault"), false);
+  const swap = previewIntent(
+    {
+      action: "swap",
+      origin_asset: "nep141:wrap.near",
+      destination_asset: "nep141:usdt.tether-token.near",
+      amount: "2",
+      amount_usd_estimate: 6.84,
+      max_slippage_bps: 50,
+      recipient: "intents.near",
+      chain: "near",
+      confidential: false,
+    },
+    policy,
+    nearBook,
+  );
+  assert.equal(swap.quote.slippageBps, 50);
+  const tee = readFileSync(new URL("./near-ai-tee.ts", import.meta.url), "utf8");
+  assert.match(tee, /ATTESTATION_REPORT_TTL_MS = 10 \* 60 \* 1000/);
+  assert.match(tee, /Deterministic preview\. The model was not called\./);
 });

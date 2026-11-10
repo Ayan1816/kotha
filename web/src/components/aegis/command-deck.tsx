@@ -2,9 +2,9 @@
 
 import { useKothaSession } from "@/app/providers";
 import { ApiKeyCard } from "@/components/aegis/api-key-card";
-import { DeckRequestError, fetchDashboard, fetchTeeCatalog, postAdminLock, postAdminUnlock, postDryRun, postExecute, postFreeze, postGrant, postPolicy, postSaveTx, postTeeChatStream, postTranslate } from "@/components/aegis/api";
+import { DeckRequestError, fetchDashboard, fetchTeeCatalog, postAdminLock, postAdminUnlock, postDryRun, postExecute, postFreeze, postGrant, postPolicy, postSaveTx, postTeeChatStream, postTranslateMany } from "@/components/aegis/api";
 import type { ChainLink } from "@/components/aegis/audit-panel";
-import { CopilotPanel, isChipKey, type ChatMessage } from "@/components/aegis/copilot-panel";
+import { CopilotPanel, isChipKey, usesFixedPreviewCopy, type ChatMessage } from "@/components/aegis/copilot-panel";
 import { translate, type Lang } from "@/components/aegis/copy";
 import { PhoneBook } from "@/components/aegis/phone-book";
 import { PolicyPanel } from "@/components/aegis/policy-panel";
@@ -155,6 +155,7 @@ export function CommandDeck() {
     if (!messagesReady || (lang !== "bn" && lang !== "en")) return;
     const pending = messages.filter((message) => {
       if (message.role !== "assistant" || message.errorCode) return false;
+      if (usesFixedPreviewCopy(message)) return false;
       if (message.lang !== "bn" && message.lang !== "en") return false;
       if (message.translationFailed) return false;
       if (message.lang === lang || message.translations?.[lang]) return false;
@@ -165,31 +166,25 @@ export function CommandDeck() {
     for (const key of keys) translateFlight.current.add(key);
     const target = lang;
     setMessages((current) => current.map((message) => (pending.some((item) => item.id === message.id) ? { ...message, translating: true } : message)));
-    void Promise.all(
-      pending.map(async (message) => {
-        try {
-          const text = await postTranslate({ text: message.text, target, accountId });
-          return { id: message.id, text, failed: false };
-        } catch {
-          return { id: message.id, text: "", failed: true };
-        }
-      }),
-    ).then((results) => {
-      for (const key of keys) translateFlight.current.delete(key);
-      setMessages((current) =>
-        current.map((message) => {
-          const found = results.find((item) => item.id === message.id);
-          if (!found) return message;
-          if (found.failed) return { ...message, translating: false, translationFailed: true };
-          return {
-            ...message,
-            translating: false,
-            translationFailed: false,
-            translations: { ...message.translations, [target]: found.text },
-          };
-        }),
-      );
-    });
+    void postTranslateMany({ texts: pending.map((message) => message.text), target, accountId })
+      .then((texts) => pending.map((message, index) => ({ id: message.id, text: texts[index] || "", failed: !texts[index] })))
+      .catch(() => pending.map((message) => ({ id: message.id, text: "", failed: true })))
+      .then((results) => {
+        for (const key of keys) translateFlight.current.delete(key);
+        setMessages((current) =>
+          current.map((message) => {
+            const found = results.find((item) => item.id === message.id);
+            if (!found) return message;
+            if (found.failed) return { ...message, translating: false, translationFailed: true };
+            return {
+              ...message,
+              translating: false,
+              translationFailed: false,
+              translations: { ...message.translations, [target]: found.text },
+            };
+          }),
+        );
+      });
   }, [accountId, lang, messages, messagesReady]);
 
   useEffect(() => {
@@ -562,6 +557,7 @@ export function CommandDeck() {
 
   const grant = dashboard?.agentState.grant;
   const reason = ownerLock || quoteError || blockReason(lang, frozen, grant, quote);
+  const ownerReady = admin || (Boolean(accountId) && (!ownerConfigured || accountId === configuredOwnerId()));
 
   const tabs: Array<{ id: TabId; key: "tabChat" | "tabGuard" | "tabProofs" | "tabSettings" }> = [
     { id: "chat", key: "tabChat" },
@@ -643,7 +639,7 @@ export function CommandDeck() {
             frozen={frozen}
             teePhase={teePhase}
             accountId={accountId}
-            ownerReady={admin || (Boolean(accountId) && (!ownerConfigured || accountId === configuredOwnerId()))}
+            ownerReady={ownerReady}
             walletConnected={Boolean(accountId)}
             nearBalance={accountId ? nearBalance : null}
             onAutoRedact={setAutoRedact}
@@ -663,6 +659,7 @@ export function CommandDeck() {
             policy={dashboard.agentState.policy}
             frozen={frozen}
             ownerLock={ownerLock}
+            ownerReady={ownerReady}
             quoteBusy={busy === "quote"}
             executeBusy={busy === "execute"}
             freezeBusy={busy === "freeze"}

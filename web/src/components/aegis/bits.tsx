@@ -1,7 +1,6 @@
 "use client";
 
 import { translate, type CopyKey, type Lang } from "@/components/aegis/copy";
-import { shortHash } from "@/components/aegis/format";
 import { cn } from "@/lib/utils";
 import { Check, Copy } from "lucide-react";
 import { useState } from "react";
@@ -72,12 +71,12 @@ export function HashRow({
   lang: Lang;
 }) {
   return (
-    <div className="flex min-w-0 flex-wrap items-start gap-x-2 gap-y-1 border-t border-white/8 py-2">
-      <span className="w-full min-w-0 text-sm text-white/60 min-[376px]:w-40 min-[376px]:shrink-0">{label}</span>
-      <code className="min-w-0 flex-1 break-all text-sm text-[#d9ffe8] min-[376px]:truncate" title={value}>
-        {shortHash(value, 10, 8)}
-      </code>
-      <CopyButton className="shrink-0" value={value} lang={lang} />
+    <div className="min-w-0 border-t border-white/8 py-2">
+      <div className="flex items-center justify-between gap-2">
+        <span className="min-w-0 text-sm text-white/60">{label}</span>
+        <CopyButton className="shrink-0" value={value} lang={lang} />
+      </div>
+      <code className="mt-1 block w-full break-all font-mono text-sm text-[#d9ffe8]">{value}</code>
     </div>
   );
 }

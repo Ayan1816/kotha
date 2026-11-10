@@ -10,7 +10,7 @@ import { EnclaveSwitch, SignatureTamperLab, SpotlightGlassCard, VoiceWaveform } 
 import type { AttestedInference, ChatModelId, DryRunPreview, PolicyStatus } from "@/lib/dashboard-types";
 import { TESTNET_FAUCET_URL } from "@/lib/wallet-proof";
 import { Mic, MicOff, Send, Shield } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useId, useRef, useState, type ReactNode } from "react";
 
 const CHIPS = ["chipSwap", "chipRemit", "chipShield", "chipSecurity"] as const;
 export type ChipKey = (typeof CHIPS)[number];
@@ -18,6 +18,15 @@ const RECORD_LIMIT_MS = 30_000;
 
 export function isChipKey(value: unknown): value is ChipKey {
   return typeof value === "string" && (CHIPS as readonly string[]).includes(value);
+}
+
+const FIXED_PREVIEW_STATUS = new Set(["PASS", "WARNING", "BLOCKED", "NEEDS_WALLET", "INSUFFICIENT_BALANCE"]);
+
+/** Preview and status copy is i18n. Only a free question answer is sent for translation. */
+export function usesFixedPreviewCopy(message: ChatMessage): boolean {
+  if (message.attestation?.decision.policy_reason === "QUESTION") return false;
+  const status = message.statusCode || message.attestation?.decision.policy_status || "";
+  return FIXED_PREVIEW_STATUS.has(status);
 }
 
 export type ChatMessage = {
@@ -585,7 +594,7 @@ function AssistantBubble({
         >
           {translate(lang, piiKey)}
           {redaction && redaction.redactionsCount > 0
-            ? ` · ${redaction.redactionsCount} · ${redaction.piiTypesFound.join(", ")}`
+            ? ` · ${redaction.redactionsCount} · ${redaction.piiTypesFound.map((type) => piiTypeLabel(lang, type)).join(", ")}`
             : ""}
         </span>
       </div>
@@ -628,8 +637,8 @@ function AssistantBubble({
             <HashRow lang={lang} label={translate(lang, "chatId")} value={attestation.chatId || "—"} />
             <HashRow lang={lang} label={translate(lang, "address")} value={attestation.signing_address || "—"} />
             <HashRow lang={lang} label={translate(lang, "signature")} value={attestation.signature || "—"} />
-            <CurlBlock lang={lang} label="signature" value={curl} />
-            <CurlBlock lang={lang} label="attestation" value={reportCurl} />
+            <CurlBlock lang={lang} label={translate(lang, "signature")} value={curl} />
+            <CurlBlock lang={lang} label={translate(lang, "mode")} value={reportCurl} />
           </section>
           <SignatureTamperLab
             signature={attestation.signature}
@@ -664,20 +673,16 @@ function ActionCard({
   onDryRun?: () => void;
   onExecute?: () => void;
 }) {
+  const reasonId = useId();
   const numeric = Number(intentAmount);
   const fromIntent = Number.isFinite(numeric) && numeric > 0;
   const fromText = readActionCard(fallbackText);
   if (!fromIntent && !fromText) return null;
+  if (status === "BLOCKED") {
+    return <p className="mt-3 text-sm text-[#ffb3c0]">{translate(lang, "blockedByPolicy")}</p>;
+  }
   const enabled = ownerReady && status === "PASS";
-  const tip = !ownerReady
-    ? translate(lang, "connectOwner")
-    : status === "NEEDS_WALLET"
-      ? translate(lang, "needsWallet")
-      : status === "INSUFFICIENT_BALANCE"
-        ? translate(lang, "insufficientBadge")
-        : status !== "PASS"
-          ? translate(lang, "blockedByPolicy")
-          : undefined;
+  const tip = enabled ? undefined : !ownerReady ? translate(lang, "connectOwner") : translate(lang, "blockedByPolicy");
   return (
     <div className="mt-3 rounded-2xl border border-white/10 bg-black/30 p-3">
       <div className="flex flex-wrap gap-2">
@@ -685,12 +690,19 @@ function ActionCard({
           {translate(lang, "dryRun")}
         </button>
         <span title={tip} className="inline-flex">
+          {tip ? (
+            <span id={reasonId} className="sr-only">
+              {tip}
+            </span>
+          ) : null}
           <button
             type="button"
             disabled={!enabled}
             aria-disabled={!enabled}
+            aria-describedby={tip ? reasonId : undefined}
+            title={tip}
             onClick={enabled ? onExecute : undefined}
-            className="h-9 rounded-xl bg-[#00EC97] px-3 text-sm font-semibold text-[#04140d] disabled:cursor-not-allowed disabled:opacity-40"
+            className="h-9 rounded-xl bg-[#00EC97] px-3 text-sm font-semibold text-[#04140d] disabled:cursor-not-allowed disabled:bg-[#2a3038] disabled:text-white/45 disabled:opacity-100"
           >
             {translate(lang, "executeButton")}
           </button>
@@ -762,8 +774,23 @@ function visibleText(message: ChatMessage, lang: Lang): string {
   if (message.errorCode === "voice_too_long") return translate(lang, "voiceTooLong");
   if (message.errorCode === "load_fail") return translate(lang, "loadFail");
   if (message.errorCode === "request_timeout") return translate(lang, "requestTimeout");
+  if (usesFixedPreviewCopy(message)) {
+    const status = message.statusCode || message.attestation?.decision.policy_status;
+    if (status === "NEEDS_WALLET") return translate(lang, "needsWallet");
+    if (status === "INSUFFICIENT_BALANCE") return translate(lang, "insufficientBadge");
+  }
   if ((lang === "bn" || lang === "en") && message.translations?.[lang]) return message.translations[lang] || message.text;
   return message.text;
+}
+
+function piiTypeLabel(lang: Lang, type: string): string {
+  if (type === "phone") return translate(lang, "piiPhone");
+  if (type === "email") return translate(lang, "piiEmail");
+  if (type === "seed") return translate(lang, "piiSeed");
+  if (type === "id") return translate(lang, "piiId");
+  if (type === "card") return translate(lang, "piiCard");
+  if (type === "api_key") return translate(lang, "piiApiKey");
+  return type;
 }
 
 function userBubbleText(message: ChatMessage, lang: Lang): string {

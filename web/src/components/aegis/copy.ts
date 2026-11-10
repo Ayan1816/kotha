@@ -325,6 +325,15 @@ const en = {
   checkFail: "FAIL",
   translateFailed: "Translation failed - Retry",
   requestTimeout: "Request timed out. Please try again.",
+  piiPhone: "phone",
+  piiEmail: "email",
+  piiSeed: "seed phrase",
+  piiId: "ID",
+  piiCard: "card",
+  piiApiKey: "API key",
+  prohoriPerTx: "This transaction is over the per-transaction limit.",
+  prohoriDaily: "This transaction is over the daily budget.",
+  nearSettles: "Settles as wNEAR (nep141:wrap.near).",
 } as const;
 
 export type CopyKey = keyof typeof en;
@@ -401,7 +410,7 @@ const bn: { [K in CopyKey]: string } = {
   responseHash: "উত্তর হ্যাশ",
   combined: "যোগ হ্যাশ",
   address: "স্বাক্ষর ঠিকানা",
-  signature: "ECDSA স্বাক্ষর",
+  signature: "সিগনেচার",
   curl: "curl যাচাই কমান্ড কপি",
   mode: "অ্যাটেস্টেশন",
   quoteTitle: "ড্রাই-রান কোট প্রিভিউ",
@@ -644,13 +653,22 @@ const bn: { [K in CopyKey]: string } = {
   needsWalletBadge: "ওয়ালেট দরকার",
   insufficientBadge: "অপর্যাপ্ত ব্যালেন্স",
   balanceSkipped: "বাদ দেওয়া হয়েছে - ওয়ালেট যুক্ত নেই",
-  passUnchecked: "PASS (ব্যালেন্স যাচাই হয়নি)",
+  passUnchecked: "পাস (ব্যালেন্স যাচাই হয়নি)",
   recipientFormat: "প্রাপকের ফরম্যাট",
   balanceCheck: "ব্যালেন্স",
   checkDaily: "দৈনিক বাজেট",
   checkFail: "ব্যর্থ",
   translateFailed: "অনুবাদ হয়নি - আবার চেষ্টা",
   requestTimeout: "অনুরোধের সময় শেষ। আবার চেষ্টা করুন।",
+  piiPhone: "ফোন",
+  piiEmail: "ইমেইল",
+  piiSeed: "সিড ফ্রেজ",
+  piiId: "আইডি",
+  piiCard: "কার্ড",
+  piiApiKey: "এপিআই কী",
+  prohoriPerTx: "এই লেনদেন প্রতি-লেনদেন সীমা ছাড়িয়েছে।",
+  prohoriDaily: "এই লেনদেন দৈনিক বাজেট ছাড়িয়েছে।",
+  nearSettles: "কারিগরি হিসাবে wNEAR (nep141:wrap.near)।",
 };
 
 export function translate(lang: Lang, key: CopyKey): string {

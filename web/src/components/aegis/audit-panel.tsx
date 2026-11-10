@@ -7,7 +7,7 @@ import { judgeReceipt, readChainExecution, rehashReceipt } from "@/lib/receipt-c
 import { explorerTxUrl, publicNetwork } from "@/lib/wallet-proof";
 import { AnimatedNumberTicker, ShimmerActionButton, SpotlightGlassCard } from "@/components/ui/aegis-primitives";
 import type { AegisIntent, AttestedInference, DryRunPreview, ExecutionResult, VerifiedExecution } from "@/lib/dashboard-types";
-import { assetLabel } from "@/components/aegis/format";
+import { assetLabel, previewSymbol } from "@/components/aegis/format";
 import { PhoneBook } from "@/components/aegis/phone-book";
 import { Download } from "lucide-react";
 import { useState } from "react";
@@ -136,6 +136,29 @@ export function dryRunTone(dryRun: DryRunPreview): "pass" | "warn" | "fail" {
   return dryRun.allowed ? "pass" : "fail";
 }
 
+export function dryRunIsPass(dryRun: DryRunPreview | null): boolean {
+  if (!dryRun) return false;
+  if (dryRun.policyAllowed === false) return false;
+  if (dryRun.balance === "insufficient" || dryRun.balance === "skipped") return false;
+  if (dryRun.warnings.some((warning) => warning.startsWith("Daily budget utilization"))) return false;
+  if (dryRun.policyAllowed == null && !dryRun.allowed) return false;
+  return true;
+}
+
+export function dryRunIsBlocked(dryRun: DryRunPreview | null): boolean {
+  if (!dryRun) return false;
+  if (dryRun.policyAllowed === false) return true;
+  return dryRun.policyAllowed == null && !dryRun.allowed && dryRun.balance !== "skipped" && dryRun.balance !== "insufficient";
+}
+
+export function formatWarning(lang: Lang, warning: string): string {
+  if (warning === "INSUFFICIENT_BALANCE") return translate(lang, "insufficientBadge");
+  if (warning === "BALANCE_SKIPPED") return translate(lang, "balanceSkipped");
+  if (warning.startsWith("PROHORI_PER_TX_LIMIT_EXCEEDED")) return `${warning} — ${translate(lang, "prohoriPerTx")}`;
+  if (warning.startsWith("PROHORI_DAILY_BUDGET_EXCEEDED")) return `${warning} — ${translate(lang, "prohoriDaily")}`;
+  return warning;
+}
+
 export function dryRunLabel(lang: Lang, dryRun: DryRunPreview): string {
   if (dryRun.balance === "skipped" && dryRun.policyAllowed !== false) return translate(lang, "passUnchecked");
   if (dryRun.balance === "insufficient" && dryRun.policyAllowed !== false) return translate(lang, "insufficientBadge");
@@ -159,14 +182,14 @@ export function DryRunChecks({ lang, dryRun }: { lang: Lang; dryRun: DryRunPrevi
 }
 
 function warningLabel(lang: Lang, warning: string): string {
-  if (warning === "INSUFFICIENT_BALANCE") return translate(lang, "insufficientBadge");
-  if (warning === "BALANCE_SKIPPED") return translate(lang, "balanceSkipped");
-  return warning;
+  return formatWarning(lang, warning);
 }
 
 export function QuoteBody({ lang, intent, dryRun, remittanceLine }: { lang: Lang; intent: AegisIntent; dryRun: DryRunPreview; remittanceLine: string | null }) {
   const origin = assetLabel(intent.origin_asset);
-  const destination = assetLabel(intent.destination_asset);
+  const originSymbol = previewSymbol(intent.origin_asset, intent.action);
+  const destinationSymbol = previewSymbol(intent.destination_asset, intent.action);
+  const settlesNear = (intent.action === "transfer" || intent.action === "withdraw") && origin.symbol === "wNEAR";
   const impact = dryRun.budgetImpact;
   const width = Math.max(0, Math.min(100, impact.utilizationPct));
   const tone = dryRunTone(dryRun);
@@ -183,8 +206,8 @@ export function QuoteBody({ lang, intent, dryRun, remittanceLine }: { lang: Lang
       </div>
       <DryRunChecks lang={lang} dryRun={dryRun} />
       <dl className="grid grid-cols-1 gap-2 text-xs min-[376px]:grid-cols-2">
-        <Info label={translate(lang, "amount")} value={`${intent.amount} ${origin.symbol}`} />
-        <Info label={translate(lang, "expected")} value={`${dryRun.quote.expectedAmountOut} ${destination.symbol}`} />
+        <Info label={translate(lang, "amount")} value={`${intent.amount} ${originSymbol}`} />
+        <Info label={translate(lang, "expected")} value={`${dryRun.quote.expectedAmountOut} ${destinationSymbol}`} />
         <Info label={translate(lang, "fee")} value="" ticker={dryRun.quote.feeUsd} />
         <Info label={translate(lang, "targetShard")} value={testnetLabel(dryRun.quote.shard)} />
         <Info label={translate(lang, "rate")} value={dryRun.quote.rate} />
@@ -193,6 +216,7 @@ export function QuoteBody({ lang, intent, dryRun, remittanceLine }: { lang: Lang
       </dl>
       {remittanceLine ? <p className="break-words font-mono text-[11px] leading-relaxed text-[#d9ffe8]">{remittanceLine}</p> : null}
       <p className="break-words font-mono text-[11px] text-white/55">{testnetLabel(dryRun.quote.route)}</p>
+      {settlesNear ? <p className="break-words font-mono text-[11px] text-white/55">{translate(lang, "nearSettles")}</p> : null}
       <div>
         <div className="mb-1 flex items-center justify-between text-[10px] uppercase tracking-[0.14em] text-white/45">
           <span>{translate(lang, "budgetImpact")}</span>
