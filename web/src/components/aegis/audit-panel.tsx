@@ -291,6 +291,14 @@ export function ProofsTable({
   onVerifyChain: (correlationId: string, receiptHash?: string) => Promise<"match" | "mismatch">;
   network?: "mainnet" | "testnet";
 }) {
+  const rows = Array.isArray(executions) ? executions : [];
+  if (rows.length === 0) {
+    return (
+      <div className="rounded-2xl border border-white/10 bg-[#07110d] px-4 py-6 text-base text-white/60 shadow-[0_16px_40px_rgba(0,0,0,0.35)]">
+        {translate(lang, "empty")}
+      </div>
+    );
+  }
   return (
     <div className="overflow-x-auto rounded-2xl border border-white/10 bg-[#07110d] shadow-[0_16px_40px_rgba(0,0,0,0.35)]">
       <table className="w-full min-w-[720px] border-collapse text-left">
@@ -305,25 +313,17 @@ export function ProofsTable({
           </tr>
         </thead>
         <tbody>
-          {executions.length === 0 ? (
-            <tr>
-              <td colSpan={6} className="px-4 py-6 text-base text-white/60">
-                {translate(lang, "empty")}
-              </td>
-            </tr>
-          ) : (
-            executions.map((row) => (
-              <ProofRow
-                key={row.correlation_id}
-                lang={lang}
-                row={row}
-                contractId={contractId}
-                highlight={highlight === row.correlation_id}
-                network={network}
-                onVerifyChain={onVerifyChain}
-              />
-            ))
-          )}
+          {rows.map((row) => (
+            <ProofRow
+              key={row.correlation_id}
+              lang={lang}
+              row={row}
+              contractId={contractId}
+              highlight={highlight === row.correlation_id}
+              network={network}
+              onVerifyChain={onVerifyChain}
+            />
+          ))}
         </tbody>
       </table>
     </div>

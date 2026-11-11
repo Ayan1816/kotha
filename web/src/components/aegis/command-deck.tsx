@@ -3,7 +3,7 @@
 import { useKothaSession } from "@/app/providers";
 import { ApiKeyCard } from "@/components/aegis/api-key-card";
 import { DeckRequestError, fetchDashboard, fetchTeeCatalog, postAdminLock, postAdminUnlock, postDryRun, postExecute, postFreeze, postGrant, postPolicy, postSaveTx, postTeeChatStream, postTranslateMany } from "@/components/aegis/api";
-import type { ChainLink } from "@/components/aegis/audit-panel";
+import { ProofsTable, type ChainLink } from "@/components/aegis/audit-panel";
 import { CopilotPanel, isChipKey, usesFixedPreviewCopy, type ChatMessage } from "@/components/aegis/copilot-panel";
 import { translate, type Lang } from "@/components/aegis/copy";
 import { PhoneBook } from "@/components/aegis/phone-book";
@@ -12,7 +12,7 @@ import { SpendingGuard } from "@/components/aegis/spending-guard";
 import { TelemetryBar } from "@/components/aegis/telemetry-bar";
 import { ShimmerActionButton } from "@/components/ui/aegis-primitives";
 import { invalidAmountReason } from "@/lib/budget-math";
-import { displayReply, type LoaderStep } from "@/lib/chat-stream";
+import { displayReply, withoutStaleSwapRefusals, type LoaderStep } from "@/lib/chat-stream";
 import { selectArmedQuote } from "@/lib/guard-quote";
 import { isLocalPreview, overallTeePhase } from "@/lib/tee-status";
 import { resolveRemittance } from "@/lib/phone-resolver";
@@ -32,7 +32,6 @@ import {
 } from "@/lib/wallet-proof";
 import { yoctoToNear } from "near-api-js";
 import { useNearWallet } from "near-connect-hooks";
-import dynamic from "next/dynamic";
 import type {
   AegisIntent,
   AttestedInference,
@@ -47,8 +46,6 @@ import type {
 import { useCallback, useEffect, useRef, useState } from "react";
 
 const MESSAGE_KEY = "kotha-messages";
-
-const ProofsTable = dynamic(() => import("@/components/aegis/audit-panel").then((mod) => mod.ProofsTable), { ssr: false });
 
 type TabId = "chat" | "guard" | "proofs" | "settings";
 
@@ -762,11 +759,11 @@ export function CommandDeck() {
             onFreeze={() => void freeze()}
           />
         ) : null}
-        {dashboard && tab === "proofs" ? (
+        {tab === "proofs" ? (
           <ProofsTable
             lang={lang}
-            executions={dashboard.executions}
-            contractId={dashboard.vaultInfo.contractId}
+            executions={dashboard?.executions ?? []}
+            contractId={dashboard?.vaultInfo.contractId ?? ""}
             highlight={quote?.execution?.correlation_id || latestChain?.id || null}
             network={session.network}
             onVerifyChain={verifyOnChain}
@@ -908,7 +905,7 @@ function readStoredMessages(value: unknown): ChatMessage[] {
       dryRunShown: record.dryRunShown === true,
     });
   }
-  return out.slice(-40);
+  return withoutStaleSwapRefusals(out).slice(-40);
 }
 
 function slimMessage(message: ChatMessage): ChatMessage {

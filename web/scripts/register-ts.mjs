@@ -1,7 +1,10 @@
-import { existsSync } from "node:fs";
-import { registerHooks } from "node:module";
+import { existsSync, readFileSync } from "node:fs";
+import { createRequire, registerHooks } from "node:module";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
+
+const require = createRequire(import.meta.url);
+const ts = require("typescript");
 
 const srcRoot = resolve(dirname(fileURLToPath(import.meta.url)), "../src");
 
@@ -28,5 +31,20 @@ registerHooks({
       if (file) return withTsExtension(pathToFileURL(file).href, context, nextResolve);
     }
     return withTsExtension(specifier, context, nextResolve);
+  },
+  // Node's type stripper does not transform JSX. Tests that render a component need this.
+  load(url, context, nextLoad) {
+    if (!url.endsWith(".tsx")) return nextLoad(url, context);
+    const filename = fileURLToPath(url);
+    const source = readFileSync(filename, "utf8");
+    const transpiled = ts.transpileModule(source, {
+      compilerOptions: {
+        target: ts.ScriptTarget.ES2022,
+        module: ts.ModuleKind.ESNext,
+        jsx: ts.JsxEmit.ReactJSX,
+      },
+      fileName: filename,
+    }).outputText;
+    return { format: "module", source: transpiled, shortCircuit: true };
   },
 });

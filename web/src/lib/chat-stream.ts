@@ -236,3 +236,19 @@ function decodeJsonString(source: string, start: number): string {
   }
   return out;
 }
+
+const STALE_SWAP_REFUSAL = /can['\u2019]t proceed with the swap/i;
+
+type StoredChatText = {
+  text?: unknown;
+  translations?: { bn?: unknown; en?: unknown } | null;
+};
+
+/** Drop saved plain-text swap refusals from older builds. Other history stays. */
+export function withoutStaleSwapRefusals<T extends StoredChatText>(messages: readonly T[]): T[] {
+  return messages.filter((message) => {
+    const translations = message.translations;
+    const parts = [message.text, translations?.bn, translations?.en];
+    return !parts.some((part) => typeof part === "string" && STALE_SWAP_REFUSAL.test(part));
+  });
+}

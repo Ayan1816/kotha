@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { translate } from "../components/aegis/copy";
-import { assembleChatBody, displayReply, LOADER_STEPS, matchingResponseHash, parseSignedPayload, partialExplanation, parseSseBlock, readActionCard } from "./chat-stream";
+import { assembleChatBody, displayReply, LOADER_STEPS, matchingResponseHash, parseSignedPayload, partialExplanation, parseSseBlock, readActionCard, withoutStaleSwapRefusals } from "./chat-stream";
 import { networkBadgeLabel } from "./wallet-proof";
 
 test("assembles SSE deltas without replacing the raw body used for the hash", () => {
@@ -86,4 +86,13 @@ test("keeps the four loader steps and the Testnet Demo badge", () => {
   for (const key of keys) {
     assert.match(bangla, new RegExp(`^ {2}${key}:`, "m"));
   }
+});
+
+test("drops saved plain-text swap refusals and keeps the rest of the history", () => {
+  const kept = { id: "keep", text: "Send 1 NEAR to bob.near", translations: { en: "Send 1 NEAR to bob.near" } };
+  const straight = { id: "old", text: "I can't proceed with the swap.", translations: {} };
+  const curly = { id: "curly", text: "Hello", translations: { en: "Can\u2019t proceed with the swap right now." } };
+  const translated = { id: "bn", text: "প্রিভিউ", translations: { bn: "Sorry, can't proceed with the swap" } };
+  const cleaned = withoutStaleSwapRefusals([kept, straight, curly, translated]);
+  assert.deepEqual(cleaned.map((message) => message.id), ["keep"]);
 });

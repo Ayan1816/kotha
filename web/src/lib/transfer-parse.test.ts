@@ -189,7 +189,7 @@ test("an unknown balance does not invent available 0", () => {
 test("valid NEAR transfers need a wallet when none is connected and pass when one is", () => {
   const phrases: Array<[string, string, string, "en" | "bn", string]> = [
     ["Send 0.01 NEAR to alice.testnet", "alice.testnet", "0.01", "en", "Preview ready. Connect your wallet to check balance and execute."],
-    ["alice.testnet কে 0.01 NEAR পাঠাও", "alice.testnet", "0.01", "bn", "প্রিভিউ তৈরি। ব্যালান্স দেখতে ও সম্পাদন করতে ওয়ালেট যুক্ত করুন।"],
+    ["alice.testnet কে 0.01 NEAR পাঠাও", "alice.testnet", "0.01", "bn", "প্রিভিউ তৈরি। ব্যালান্স দেখতে ও চালাতে ওয়ালেট যুক্ত করুন।"],
     ["send 1 NEAR to bob.near", "bob.near", "1", "en", "Preview ready. Connect your wallet to check balance and execute."],
   ];
   const empty = { public: {}, confidential: {}, prices: {} };

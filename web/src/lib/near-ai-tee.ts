@@ -821,7 +821,7 @@ export function guardTransferCommand(
 }
 
 function needsWalletLine(locale: ChatLocale, message: string): string {
-  if (locale === "bn" || hasBengali(message)) return "প্রিভিউ তৈরি। ব্যালান্স দেখতে ও সম্পাদন করতে ওয়ালেট যুক্ত করুন।";
+  if (locale === "bn" || hasBengali(message)) return "প্রিভিউ তৈরি। ব্যালান্স দেখতে ও চালাতে ওয়ালেট যুক্ত করুন।";
   return "Preview ready. Connect your wallet to check balance and execute.";
 }
 
