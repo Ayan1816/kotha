@@ -11,6 +11,17 @@ export function isNearAccountId(value: string): boolean {
   return ACCOUNT_NAME.test(id);
 }
 
+/** 2–64 chars of lowercase letters, digits, and single separators, or a 64-hex implicit account. */
+export function isValidNearAccountId(value: string): boolean {
+  const id = value.trim();
+  if (/^[0-9a-f]{64}$/.test(id)) return true;
+  if (id.length < 2 || id.length > 64) return false;
+  if (!/^[a-z0-9._-]+$/.test(id)) return false;
+  if (/^[._-]/.test(id) || /[._-]$/.test(id)) return false;
+  if (/[._-]{2}/.test(id)) return false;
+  return true;
+}
+
 export function isImplicitAccount(value: string): boolean {
   return /^[0-9a-f]{64}$/i.test(value.trim());
 }

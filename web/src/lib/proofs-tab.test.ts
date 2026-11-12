@@ -36,8 +36,10 @@ const sample: VerifiedExecution = {
 test("Proofs renders the localized empty state in English and Bengali", () => {
   const english = renderProofs("en", []);
   const bangla = renderProofs("bn", []);
-  assert.match(english, /No proofs yet\./);
-  assert.match(bangla, /এখনো কোনো প্রমাণ নেই।/);
+  assert.match(english, /Proofs appear here after an executed \(signed\) transaction\./);
+  assert.match(english, /Show details/);
+  assert.match(bangla, /স্বাক্ষরিত/);
+  assert.match(bangla, /বিস্তারিত দেখুন/);
   assert.equal(english.includes("<table"), false);
   assert.equal(bangla.includes("<table"), false);
 });
@@ -46,5 +48,5 @@ test("Proofs lists a recorded execution when one exists", () => {
   const html = renderProofs("en", [sample]);
   assert.match(html, /<table/);
   assert.match(html, />swap</);
-  assert.equal(html.includes("No proofs yet."), false);
+  assert.equal(html.includes("Proofs appear here"), false);
 });

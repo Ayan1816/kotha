@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { previewIntent, type ActivePolicy } from "./intents-agent";
-import { guardTransferCommand, isDeterministicCommand } from "./near-ai-tee";
+import { translate } from "../components/aegis/copy";
+import { guardTransferCommand, isDeterministicCommand, localCommandDecision } from "./near-ai-tee";
 import { answerAsQuestion, asksAboutBalance, isGeneralQuestion, normalizeVoiceSpelling, questionFallback } from "./question-intent";
 import { parseTransferCommand } from "./transfer-parse";
 
@@ -301,7 +302,13 @@ test("plain NEAR transfers show NEAR with zero slippage and skip the model", () 
   assert.equal(isDeterministicCommand("withdraw 1 NEAR"), true);
   assert.equal(isDeterministicCommand("what is near"), false);
   assert.equal(isDeterministicCommand("Buy USDT with 2 NEAR"), true);
-  assert.equal(isDeterministicCommand("Put 5 USDT in the private vault"), false);
+  assert.equal(isDeterministicCommand("Put 5 USDT in the private vault"), true);
+  assert.equal(isDeterministicCommand("৫ USDT গোপন ভল্টে রাখো"), true);
+  const shield = localCommandDecision("Put 5 USDT in the private vault", policy, nearBook, "en");
+  assert.equal(shield.intent?.action, "shield");
+  assert.equal(shield.intent?.amount, "5");
+  assert.equal(shield.intent?.confidential, true);
+  assert.equal(shield.intent?.recipient, "intents.far");
   const swap = previewIntent(
     {
       action: "swap",
@@ -321,4 +328,73 @@ test("plain NEAR transfers show NEAR with zero slippage and skip the model", () 
   const tee = readFileSync(new URL("./near-ai-tee.ts", import.meta.url), "utf8");
   assert.match(tee, /ATTESTATION_REPORT_TTL_MS = 10 \* 60 \* 1000/);
   assert.match(tee, /Deterministic preview\. The model was not called\./);
+});
+
+test("an invalid NEAR account is rejected in English and Bengali before a transfer card", () => {
+  const implicit = "a".repeat(64);
+  assert.equal(isDeterministicCommand("Send 1 NEAR to bad$$name"), true);
+  assert.equal(isDeterministicCommand("bad$$name কে ১ NEAR পাঠাও"), true);
+  assert.equal(isDeterministicCommand(`Send 1 NEAR to ${implicit}`), true);
+  for (const [message, locale, sentence] of [
+    ["Send 1 NEAR to bad$$name", "en", translate("en", "invalidNearAccount")],
+    ["bad$$name কে ১ NEAR পাঠাও", "bn", translate("bn", "invalidNearAccount")],
+    ["Send 1 NEAR to bad$$name", "bn", translate("bn", "invalidNearAccount")],
+  ] as const) {
+    const decision = localCommandDecision(message, policy, nearBook, locale);
+    assert.equal(decision.intent, null, message);
+    assert.equal(decision.explanation, sentence, message);
+    assert.equal(decision.policy_reason, "INVALID_NEAR_ACCOUNT", message);
+    assert.equal(guardTransferCommand(message, { action: "transfer", recipient: "alice.testnet", amount: "1" }, policy, nearBook, locale), null, message);
+  }
+  const bad = previewIntent(
+    {
+      action: "transfer",
+      origin_asset: "nep141:wrap.near",
+      destination_asset: "nep141:wrap.near",
+      amount: "1",
+      amount_usd_estimate: 3.42,
+      max_slippage_bps: 0,
+      recipient: "bad$$name",
+      chain: "near",
+      confidential: false,
+    },
+    policy,
+    nearBook,
+  );
+  assert.equal(bad.checks?.find((check) => check.code === "recipient")?.result, "FAIL");
+  assert.equal(bad.policyAllowed, false);
+  const good = previewIntent(
+    {
+      action: "transfer",
+      origin_asset: "nep141:wrap.near",
+      destination_asset: "nep141:wrap.near",
+      amount: "1",
+      amount_usd_estimate: 3.42,
+      max_slippage_bps: 0,
+      recipient: implicit,
+      chain: "near",
+      confidential: false,
+    },
+    policy,
+    nearBook,
+  );
+  assert.equal(good.checks?.find((check) => check.code === "recipient")?.result, "PASS");
+});
+
+test("a Bengali over-limit explanation is built from i18n and keeps PROHORI codes", () => {
+  const blocked = guardTransferCommand(
+    "alice.testnet কে 1000 NEAR পাঠাও",
+    { action: "transfer" },
+    policy,
+    { public: {}, confidential: {}, prices: {} },
+    "bn",
+  );
+  assert.ok(blocked);
+  assert.equal(blocked.policy_status, "BLOCKED");
+  assert.match(blocked.explanation, /PROHORI_PER_TX_LIMIT_EXCEEDED/);
+  assert.match(blocked.explanation, /PROHORI_DAILY_BUDGET_EXCEEDED/);
+  assert.match(blocked.explanation, /[\u0980-\u09FF]/);
+  const prose = blocked.explanation.replace(/PROHORI_[A-Z0-9_]+/g, "").replace(/\bNEAR\b/g, "");
+  assert.equal(/[A-Za-z]{3,}/.test(prose), false);
+  assert.match(blocked.explanation, /1000/);
 });

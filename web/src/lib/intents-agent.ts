@@ -26,6 +26,7 @@ import fs from "fs";
 import { aegisStatePath, readTextFile, writeJsonFile } from "./aegis-paths";
 import { projectSpend, roundUsd, sumTodayReceiptUsd, utcDayStamp, ZERO_AMOUNT_WARNING } from "./budget-math";
 import { listReceiptRecords } from "./receipt-store";
+import { extractE164, isValidNearAccountId } from "./near-account";
 import { readTransferFields } from "./transfer-parse";
 
 export const AGENT_ID = "agent-kotha-prime.near";
@@ -547,16 +548,24 @@ export function normalizeBalancesContext(ctx: unknown): BalanceBook {
   return skipBalance ? { ...book, skipBalance: true } : book;
 }
 
+function recipientPasses(action: IntentAction, recipient: string): boolean {
+  if (action !== "transfer" && action !== "withdraw") return true;
+  const id = recipient.trim();
+  if (!id) return false;
+  if (id === "[REDACTED_EMAIL]" || id === "[REDACTED_PHONE]") return true;
+  if (isValidNearAccountId(id)) return true;
+  return Boolean(extractE164(id));
+}
+
 function policyChecks(
   intent: AegisIntent,
   warnings: string[],
   balance: "ok" | "skipped" | "insufficient",
 ): PolicyCheck[] {
-  const needsRecipient = intent.action === "transfer" || intent.action === "withdraw";
   return [
     { code: "perTx", result: warnings.some((warning) => warning.startsWith("PROHORI_PER_TX_LIMIT_EXCEEDED")) ? "FAIL" : "PASS" },
     { code: "daily", result: warnings.some((warning) => warning.startsWith("PROHORI_DAILY_BUDGET_EXCEEDED")) ? "FAIL" : "PASS" },
-    { code: "recipient", result: needsRecipient && intent.recipient.trim().length === 0 ? "FAIL" : "PASS" },
+    { code: "recipient", result: recipientPasses(intent.action, intent.recipient) ? "PASS" : "FAIL" },
     { code: "balance", result: balance === "skipped" ? "SKIPPED" : balance === "insufficient" ? "FAIL" : "PASS" },
   ];
 }
@@ -617,9 +626,9 @@ export function previewIntent(intent: AegisIntent, policy: ActivePolicy, balance
     allowed = false;
     warnings.push("Confidential shard intents.far is disabled by owner policy.");
   }
-  if ((intent.action === "transfer" || intent.action === "withdraw") && intent.recipient.trim().length === 0) {
+  if ((intent.action === "transfer" || intent.action === "withdraw") && !recipientPasses(intent.action, intent.recipient)) {
     allowed = false;
-    warnings.push("A recipient is required for this action.");
+    warnings.push(intent.recipient.trim() ? "INVALID_NEAR_ACCOUNT" : "A recipient is required for this action.");
   }
   if (notional.atomic <= BigInt(0)) {
     allowed = false;

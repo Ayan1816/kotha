@@ -7,7 +7,7 @@ import { MAX_REPLY_TOKENS } from "./ai-rate-limit";
 import { extractE164, wantsConfidential } from "./near-account";
 import { redactDeterministic, redactSensitiveText } from "./pii-redact";
 import { answerAsQuestion, isGeneralQuestion, normalizeVoiceSpelling } from "./question-intent";
-import { directedRecipient, foldDigits, messageTransferTarget, parseAmountToken, readTransferFields, type TransferFields } from "./transfer-parse";
+import { directedRecipient, foldDigits, invalidDirectedAccount, messageTransferTarget, parseAmountToken, readTransferFields, type TransferFields } from "./transfer-parse";
 export { parseTransferCommand, type ParsedTransfer } from "./transfer-parse";
 import { displayReply, interpretChatBody, matchingResponseHash, parseSignedPayload, partialExplanation, type LoaderStep } from "./chat-stream";
 import { publicNetwork, TESTNET_FAUCET_URL } from "./wallet-proof";
@@ -665,7 +665,7 @@ function shouldSkipModel(message: string): boolean {
   return isDeterministicCommand(message);
 }
 
-/** Transfer or withdraw whose amount, token, and recipient are already in the text. */
+/** Transfer, swap, shield, or withdraw whose amount and parties are already in the text. */
 export function isDeterministicCommand(message: string): boolean {
   if (isGeneralQuestion(message)) return false;
   const folded = foldPrompt(message);
@@ -676,12 +676,36 @@ export function isDeterministicCommand(message: string): boolean {
     if (!parsed?.amount || Number(parsed.amount) <= 0) return false;
     return findAssets(folded).length >= 2;
   }
+  if (action === "shield") {
+    const parsed = parseAmountToken(folded);
+    return Boolean(parsed?.amount && Number(parsed.amount) > 0);
+  }
   if (action !== "transfer" && action !== "withdraw") return false;
+  if (rejectedAccount(folded)) return true;
   const parsed = parseAmountToken(folded);
   if (!parsed?.amount || !parsed.token) return false;
   if (action === "withdraw") return Boolean(detectRecipient(folded, "withdraw"));
   const target = messageTransferTarget(folded);
   return Boolean(target.account || target.phone);
+}
+
+function rejectedAccount(message: string): string {
+  const folded = foldPrompt(message);
+  const action = detectAction(folded);
+  if (action !== "transfer" && action !== "withdraw") return "";
+  return invalidDirectedAccount(folded);
+}
+
+function rejectedAccountDecision(userMessage: string, locale: ChatLocale): CopilotDecision | null {
+  if (!rejectedAccount(userMessage)) return null;
+  const copyLocale = locale === "bn" || hasBengali(userMessage) ? "bn" : locale;
+  return {
+    explanation: translate(copyLocale, "invalidNearAccount"),
+    risk_score: 20,
+    policy_status: "BLOCKED",
+    policy_reason: "INVALID_NEAR_ACCOUNT",
+    intent: null,
+  };
 }
 
 function fastLocalPreview(
@@ -739,6 +763,8 @@ function resolveDecision(
   rawIntent: unknown,
   locale: ChatLocale,
 ): CopilotDecision {
+  const rejected = rejectedAccountDecision(userMessage, locale);
+  if (rejected) return rejected;
   const local = decideLocally(userMessage, policyContext, balancesContext, redaction, locale);
   if (isScriptedKothaPrompt(foldPrompt(userMessage))) return local;
   if (isGeneralQuestion(userMessage)) return answerAsQuestion(modelDecision?.explanation, locale, userMessage);
@@ -776,6 +802,7 @@ export function guardTransferCommand(
   risk_score: number;
 } | null {
   if (isGeneralQuestion(message)) return null;
+  if (rejectedAccount(message)) return null;
   const target = messageTransferTarget(message);
   const parsedAmount = parseAmountToken(message);
   const base = readTransferFields(loose, message);
@@ -809,7 +836,7 @@ export function guardTransferCommand(
   const policyStatus = statusFromPreview(preview);
   const redactionNote =
     redaction && redaction.redactionsCount > 0 ? " Personal data was masked before the prompt left the privacy boundary." : "";
-  const explanation = explanationFor(foldPrompt(message), painted, preview, policyStatus, false, redactionNote, locale);
+  const explanation = explanationFor(foldPrompt(message), painted, preview, policyStatus, false, redactionNote, locale, policy.perTxCapUsd);
   return {
     intent: painted,
     preview,
@@ -856,10 +883,54 @@ function explanationFor(
   assumedAmount: boolean,
   redactionNote: string,
   locale: ChatLocale,
+  perTxCapUsd = 0,
 ): string {
   if (status === "NEEDS_WALLET") return needsWalletLine(locale, folded);
   if (status === "INSUFFICIENT_BALANCE") return insufficientLine(locale, folded);
+  const limits = limitExplanation(locale, folded, intent, preview, status, perTxCapUsd);
+  if (limits) return limits;
   return withProhoriSentence(bilingualExplanation(folded, intent, preview, status, assumedAmount, redactionNote, locale), locale);
+}
+
+function actionLabel(locale: ChatLocale, action: IntentAction): string {
+  if (action === "swap") return translate(locale, "actionSwap");
+  if (action === "transfer") return translate(locale, "actionTransfer");
+  if (action === "withdraw") return translate(locale, "actionWithdraw");
+  if (action === "shield") return translate(locale, "actionShield");
+  if (action === "unshield") return translate(locale, "actionUnshield");
+  return translate(locale, "action");
+}
+
+function limitExplanation(
+  locale: ChatLocale,
+  folded: string,
+  intent: AegisIntent,
+  preview: DryRunPreview,
+  status: PolicyStatus,
+  perTxCapUsd: number,
+): string | null {
+  if (status !== "BLOCKED") return null;
+  const perTx = preview.warnings.some((warning) => warning.startsWith("PROHORI_PER_TX_LIMIT_EXCEEDED"));
+  const daily = preview.warnings.some((warning) => warning.startsWith("PROHORI_DAILY_BUDGET_EXCEEDED"));
+  if (!perTx && !daily) return null;
+  const lang: ChatLocale = locale === "bn" || hasBengali(folded) ? "bn" : locale;
+  const action = actionLabel(lang, intent.action);
+  const asset = spokenSymbol(intent.origin_asset, intent.action);
+  const tx = preview.budgetImpact.txUsd.toFixed(2);
+  const details = [
+    perTx ? fillCopy(lang, "prohoriPerTx", { tx, cap: perTxCapUsd.toFixed(2) }) : "",
+    daily
+      ? fillCopy(lang, "prohoriDaily", {
+          spent: preview.budgetImpact.currentSpentUsd.toFixed(2),
+          tx,
+          projected: preview.budgetImpact.projectedSpentUsd.toFixed(2),
+          daily: preview.budgetImpact.dailyLimitUsd.toFixed(2),
+        })
+      : "",
+  ]
+    .filter((part) => part.length > 0)
+    .join(" ");
+  return fillCopy(lang, "limitBlocked", { action, amount: intent.amount, asset, tx, details });
 }
 
 function withProhoriSentence(text: string, locale: ChatLocale): string {
@@ -954,6 +1025,8 @@ function decideLocally(
   const balances = normalizeBalancesContext(balancesContext);
   const folded = foldPrompt(userMessage);
   if (isAdversarial(folded)) return adversarialDecision(policy, balances, locale);
+  const rejected = rejectedAccountDecision(userMessage, locale);
+  if (rejected) return rejected;
   if (isGeneralQuestion(userMessage)) return answerAsQuestion(null, locale, userMessage);
   const drafted = parseUserIntent(folded);
   if (!drafted) {
@@ -971,7 +1044,7 @@ function decideLocally(
     redaction && redaction.redactionsCount > 0
       ? " Personal data was masked before the prompt left the privacy boundary."
       : "";
-  const explanation = explanationFor(folded, drafted.intent, preview, policyStatus, drafted.assumedAmount, redactionNote, locale);
+  const explanation = explanationFor(folded, drafted.intent, preview, policyStatus, drafted.assumedAmount, redactionNote, locale, policy.perTxCapUsd);
   return {
     explanation,
     risk_score: scoreRisk(riskBasis(preview), preview.budgetImpact.txUsd, policy.perTxCapUsd),

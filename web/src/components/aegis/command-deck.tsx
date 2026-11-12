@@ -12,7 +12,7 @@ import { SpendingGuard } from "@/components/aegis/spending-guard";
 import { TelemetryBar } from "@/components/aegis/telemetry-bar";
 import { ShimmerActionButton } from "@/components/ui/aegis-primitives";
 import { invalidAmountReason } from "@/lib/budget-math";
-import { displayReply, withoutStaleSwapRefusals, type LoaderStep } from "@/lib/chat-stream";
+import { acceptedTranslation, displayReply, withoutStaleSwapRefusals, type LoaderStep } from "@/lib/chat-stream";
 import { selectArmedQuote } from "@/lib/guard-quote";
 import { isLocalPreview, overallTeePhase } from "@/lib/tee-status";
 import { resolveRemittance } from "@/lib/phone-resolver";
@@ -175,12 +175,13 @@ export function CommandDeck() {
           current.map((message) => {
             const found = results.find((item) => item.id === message.id);
             if (!found) return message;
-            if (found.failed) return { ...message, translating: false, translationFailed: true };
+            const accepted = acceptedTranslation(found.failed ? "" : found.text);
+            if (!accepted) return { ...message, translating: false, translationFailed: true };
             return {
               ...message,
               translating: false,
               translationFailed: false,
-              translations: { ...message.translations, [target]: found.text },
+              translations: { ...message.translations, [target]: accepted },
             };
           }),
         );

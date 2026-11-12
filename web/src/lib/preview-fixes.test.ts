@@ -61,7 +61,7 @@ test("dry-run selects the clicked card and does not switch tabs", () => {
 
 test("Buy USDT with 2 NEAR is a deterministic swap preview", () => {
   assert.equal(isDeterministicCommand("Buy USDT with 2 NEAR"), true);
-  assert.equal(isDeterministicCommand("Put 5 USDT in the private vault"), false);
+  assert.equal(isDeterministicCommand("Put 5 USDT in the private vault"), true);
 
   const skipped = localCommandDecision("Buy USDT with 2 NEAR", policy, emptyBook, "en");
   assert.equal(skipped.policy_status, "NEEDS_WALLET");

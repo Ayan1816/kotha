@@ -4,7 +4,7 @@ import { DryRunSummary } from "@/components/aegis/audit-panel";
 import { CopyButton, HashRow } from "@/components/aegis/bits";
 import { fillCopy, translate, type CopyKey, type Lang } from "@/components/aegis/copy";
 import { actionCopyKey, actionTone, attestationCurl, isNativeNearTransfer, previewSymbol, showSlippageRow, showWnearLine, signatureCurl } from "@/components/aegis/format";
-import { displayReply, LOADER_STEPS, readActionCard, type LoaderStep } from "@/lib/chat-stream";
+import { displayReply, LOADER_STEPS, readActionCard, visibleMessageText, type LoaderStep } from "@/lib/chat-stream";
 import { isLocalPreview } from "@/lib/tee-status";
 import { recordedBlobToWav, voiceExceedsLimit } from "@/lib/wav";
 import { cn } from "@/lib/utils";
@@ -864,6 +864,7 @@ function visibleText(message: ChatMessage, lang: Lang): string {
   if (message.errorCode === "request_timeout") return translate(lang, "requestTimeout");
   const decision = message.attestation?.decision;
   if (decision && /prompt injection/i.test(decision.policy_reason)) return translate(lang, "injectionBlocked");
+  if (decision?.policy_reason === "INVALID_NEAR_ACCOUNT") return translate(lang, "invalidNearAccount");
   if (decision?.intent?.action === "swap") {
     return swapReply(lang, decision.intent, message.dryRun, message.statusCode || decision.policy_status);
   }
@@ -872,7 +873,7 @@ function visibleText(message: ChatMessage, lang: Lang): string {
     if (status === "NEEDS_WALLET") return translate(lang, "needsWallet");
     if (status === "INSUFFICIENT_BALANCE") return translate(lang, "insufficientBadge");
   }
-  if ((lang === "bn" || lang === "en") && message.translations?.[lang]) return message.translations[lang] || message.text;
+  if (lang === "bn" || lang === "en") return visibleMessageText(message.text, message.translations?.[lang]);
   return message.text;
 }
 
@@ -901,6 +902,7 @@ function piiTypeLabel(lang: Lang, type: string): string {
 
 function userBubbleText(message: ChatMessage, lang: Lang): string {
   if (isChipKey(message.chipKey)) return translate(lang, message.chipKey);
+  if (lang === "bn" || lang === "en") return visibleMessageText(message.text, message.translations?.[lang]);
   return message.text;
 }
 

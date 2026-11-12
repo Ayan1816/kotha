@@ -30,7 +30,10 @@ test("components do not hardcode Bengali outside the i18n dictionaries", () => {
 });
 
 test("empty states and tooltips come from i18n keys", () => {
-  assert.equal(translate("en", "empty"), "No proofs yet.");
+  assert.equal(
+    translate("en", "empty"),
+    "Proofs appear here after an executed (signed) transaction. Chat replies carry their own TEE signature under Show details.",
+  );
   assert.equal(translate("bn", "teeVerifiedTip"), "সিগনেচার অ্যাটেস্টেশন ঠিকানার সাথে মিলেছে এবং রেসপন্স হ্যাশ মিলেছে।");
   assert.equal(translate("en", "translating"), "Translating...");
   assert.equal(translate("bn", "translating"), "অনুবাদ হচ্ছে...");

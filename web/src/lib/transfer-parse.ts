@@ -1,4 +1,4 @@
-import { extractE164, extractNearAccounts, isNearAccountId } from "./near-account";
+import { extractE164, extractNearAccounts, isNearAccountId, isValidNearAccountId } from "./near-account";
 
 const BN_DIGITS = "০১২৩৪৫৬৭৮৯";
 const RECIPIENT_RE = /(?:to|কে)\s+([a-z0-9_\-.]+\.(?:near|testnet))/i;
@@ -19,6 +19,25 @@ export function directedRecipient(text: string): string {
   const recipient = folded.match(RECIPIENT_RE)?.[1] || folded.match(RECIPIENT_BEFORE_RE)?.[1] || "";
   if (!recipient || /^intents\.(?:near|far)$/i.test(recipient)) return "";
   return recipient;
+}
+
+/** Token after "to" or before "কে", including ids that are not valid accounts. */
+export function directedRecipientToken(text: string): string {
+  const folded = foldDigits(text);
+  const afterTo = folded.match(/(?:^|\s)to\s+(\S+)/i)?.[1] || "";
+  const beforeKe = folded.match(/(\S+)\s*কে(?=\s|$)/)?.[1] || "";
+  const raw = afterTo || beforeKe;
+  return raw.replace(/^[("'`]+|[)"'`,.!?;:]+$/g, "");
+}
+
+/** A directed transfer recipient that is not a NEAR account or a phone. Empty when the token is acceptable. */
+export function invalidDirectedAccount(text: string): string {
+  const token = directedRecipientToken(text);
+  if (!token) return "";
+  if (/^intents\.(?:near|far)$/i.test(token)) return "";
+  if (isValidNearAccountId(token)) return "";
+  if (extractE164(token)) return "";
+  return token;
 }
 
 export function parseAmountToken(message: string): { amount: string; token: string } | null {

@@ -80,6 +80,18 @@ export function displayReply(text: string): string {
   return unwrapChatText(source, 0) || (source.startsWith("{") || source.startsWith("[") ? "" : source);
 }
 
+/** A translation that would render as blank is not accepted. */
+export function acceptedTranslation(incoming: string | null | undefined): string {
+  const trimmed = (incoming ?? "").trim();
+  if (!trimmed) return "";
+  return displayReply(trimmed).trim() ? trimmed : "";
+}
+
+/** Keep the original line until a non-empty translation is ready. */
+export function visibleMessageText(original: string, translated: string | null | undefined): string {
+  return acceptedTranslation(translated) || original;
+}
+
 function unwrapChatText(source: string, depth: number): string {
   if (depth > 4) return "";
   const start = source.indexOf("{");

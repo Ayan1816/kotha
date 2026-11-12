@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { readFileSync } from "node:fs";
 import test from "node:test";
 import { translate } from "../components/aegis/copy";
-import { assembleChatBody, displayReply, LOADER_STEPS, matchingResponseHash, parseSignedPayload, partialExplanation, parseSseBlock, readActionCard, withoutStaleSwapRefusals } from "./chat-stream";
+import { acceptedTranslation, assembleChatBody, displayReply, LOADER_STEPS, matchingResponseHash, parseSignedPayload, partialExplanation, parseSseBlock, readActionCard, visibleMessageText, withoutStaleSwapRefusals } from "./chat-stream";
 import { networkBadgeLabel } from "./wallet-proof";
 
 test("assembles SSE deltas without replacing the raw body used for the hash", () => {
@@ -86,6 +86,16 @@ test("keeps the four loader steps and the Testnet Demo badge", () => {
   for (const key of keys) {
     assert.match(bangla, new RegExp(`^ {2}${key}:`, "m"));
   }
+});
+
+test("a blank translation never replaces the original message", () => {
+  assert.equal(visibleMessageText("Send 1 NEAR to bob.near", ""), "Send 1 NEAR to bob.near");
+  assert.equal(visibleMessageText("Send 1 NEAR to bob.near", "   "), "Send 1 NEAR to bob.near");
+  assert.equal(visibleMessageText("Send 1 NEAR to bob.near", null), "Send 1 NEAR to bob.near");
+  assert.equal(visibleMessageText("Send 1 NEAR to bob.near", '{"reply":""}'), "Send 1 NEAR to bob.near");
+  assert.equal(acceptedTranslation(""), "");
+  assert.equal(acceptedTranslation("  "), "");
+  assert.equal(visibleMessageText("Hello", "হ্যালো"), "হ্যালো");
 });
 
 test("drops saved plain-text swap refusals and keeps the rest of the history", () => {
