@@ -1,6 +1,7 @@
 /** Official NEAR account-name body. Callers also require a .near or .testnet suffix. */
 const ACCOUNT_NAME = /^(([a-z\d]+[-_])*[a-z\d]+\.)*([a-z\d]+[-_])*[a-z\d]+$/;
-const NAMED_ACCOUNT = /(?:^|[^a-z0-9_-])((?:[a-z0-9]+(?:[-_][a-z0-9]+)*\.)+(?:near|testnet))(?![a-z0-9_-])/gi;
+/** A hyphen plus a non-ASCII suffix (Bengali -এ, -তে, -কে) stays outside the account id. */
+const NAMED_ACCOUNT = /(?:^|[^a-z0-9_-])((?:[a-z0-9]+(?:[-_][a-z0-9]+)*\.)+(?:near|testnet))(?![a-z0-9_]|-(?=[\u0000-\u007f]))/gi;
 const IMPLICIT_ACCOUNT = /(?:^|[^0-9a-f])([0-9a-f]{64})(?![0-9a-f])/gi;
 
 export function isNearAccountId(value: string): boolean {

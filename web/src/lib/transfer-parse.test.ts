@@ -381,7 +381,7 @@ test("an invalid NEAR account is rejected in English and Bengali before a transf
   assert.equal(good.checks?.find((check) => check.code === "recipient")?.result, "PASS");
 });
 
-test("a Bengali over-limit explanation is built from i18n and keeps PROHORI codes", () => {
+test("a Bengali over-limit explanation is built from i18n without raw policy codes", () => {
   const blocked = guardTransferCommand(
     "alice.testnet কে 1000 NEAR পাঠাও",
     { action: "transfer" },
@@ -391,13 +391,13 @@ test("a Bengali over-limit explanation is built from i18n and keeps PROHORI code
   );
   assert.ok(blocked);
   assert.equal(blocked.policy_status, "BLOCKED");
-  assert.match(blocked.explanation, /PROHORI_PER_TX_LIMIT_EXCEEDED/);
-  assert.match(blocked.explanation, /PROHORI_DAILY_BUDGET_EXCEEDED/);
+  assert.equal(/PROHORI_|PRV_KEY_|PRIVATE_KEY_/.test(blocked.explanation), false);
   assert.match(blocked.explanation, /[\u0980-\u09FF]/);
-  const prose = blocked.explanation.replace(/PROHORI_[A-Z0-9_]+/g, "").replace(/\bNEAR\b/g, "");
+  const prose = blocked.explanation.replace(/\bNEAR\b/g, "");
   assert.equal(/[A-Za-z]{3,}/.test(prose), false);
   assert.match(blocked.explanation, /1000/);
   assert.match(blocked.explanation, /ডলার/);
+  assert.equal(blocked.preview.warnings.some((warning) => warning.startsWith("PROHORI_")), true);
 });
 
 test("negative, zero, and extra decimals are rejected in English and Bengali", () => {

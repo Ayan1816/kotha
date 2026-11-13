@@ -27,6 +27,8 @@ export function SpendingGuard({
   quoteError,
   executeReason,
   cardOutcome = null,
+  executed = false,
+  inputsReady = true,
   onDryRun,
   onExecute,
   onFreeze,
@@ -48,6 +50,8 @@ export function SpendingGuard({
   quoteError: string | null;
   executeReason: string | null;
   cardOutcome?: CardOutcome | null;
+  executed?: boolean;
+  inputsReady?: boolean;
   onDryRun: () => void;
   onExecute: () => void;
   onFreeze: () => void;
@@ -58,8 +62,11 @@ export function SpendingGuard({
   const policyBlocked = dryRunIsBlocked(dryRun);
   const nativeBlock = intent ? nativeExecuteBlock(intent) : null;
   const nativeReason = nativeBlock ? translate(lang, nativeBlock) : null;
-  const canExecute = ownerReady && !nativeBlock && !policyBlocked && !executeReason && !executeHint && Boolean(intent);
-  const executeTip = canExecute
+  const canExecute = ownerReady && inputsReady && !nativeBlock && !policyBlocked && !executeReason && !executeHint && Boolean(intent) && !executed && !executeBusy;
+  const executeLabel = executed ? translate(lang, "executeDone") : executeBusy ? translate(lang, "executeProcessing") : translate(lang, "executeButton");
+  const executeTip = executed || executeBusy || !inputsReady
+    ? undefined
+    : canExecute
     ? undefined
     : executeHint
       ? executeHint
@@ -97,14 +104,16 @@ export function SpendingGuard({
         </p>
       ) : null}
       {intent ? <IntentLine lang={lang} intent={intent} /> : null}
-      {intent && dryRun ? <DryRunCard key={`${intent.action}:${intent.amount}:${intent.recipient}:${intent.destination_asset}`} lang={lang} dryRun={dryRun} /> : null}
+      {intent && dryRun ? (
+        <DryRunCard key={`${intent.action}:${intent.amount}:${intent.recipient}:${intent.destination_asset}`} lang={lang} dryRun={dryRun} intent={intent} />
+      ) : null}
       <div className="mt-6 flex flex-wrap items-center gap-2">
         {policyBlocked ? (
           <p className="text-sm text-[#ffb3c0]">{blockedLine}</p>
         ) : (
           <>
             <GuardButton label={translate(lang, "dryRun")} title={dryTitle} busy={quoteBusy} disabled={Boolean(dryTitle)} onClick={onDryRun} tone="ghost" />
-            <GuardButton label={translate(lang, "executeButton")} title={executeTip} busy={executeBusy} disabled={!canExecute} onClick={onExecute} tone="primary" />
+            <GuardButton label={executeLabel} title={executeTip} busy={executeBusy || executed} keepLabel disabled={!canExecute} onClick={onExecute} tone="primary" />
           </>
         )}
         <GuardButton
@@ -146,7 +155,7 @@ function IntentLine({ lang, intent }: { lang: Lang; intent: AegisIntent }) {
   );
 }
 
-function DryRunCard({ lang, dryRun }: { lang: Lang; dryRun: DryRunPreview }) {
+function DryRunCard({ lang, dryRun, intent }: { lang: Lang; dryRun: DryRunPreview; intent: AegisIntent }) {
   const tone = dryRunTone(dryRun);
   const shell =
     tone === "fail" ? "border-[#FF3B5C]/50 bg-[#FF3B5C]/10" : tone === "warn" ? "border-[#FF8A00]/40 bg-[#FF8A00]/10" : "border-[#00EC97]/40 bg-[#00EC97]/10";
@@ -155,7 +164,7 @@ function DryRunCard({ lang, dryRun }: { lang: Lang; dryRun: DryRunPreview }) {
   return (
     <div className={`mt-4 rounded-2xl border p-4 ${shell}`}>
       <p className={`text-sm font-semibold uppercase ${title}`}>{dryRunLabel(lang, dryRun)}</p>
-      <DryRunSummary lang={lang} dryRun={dryRun} />
+      <DryRunSummary lang={lang} dryRun={dryRun} intent={intent} />
       {warning ? <p className="mt-2 text-sm text-[#ffd7a1]">{formatWarning(lang, warning)}</p> : null}
     </div>
   );
@@ -179,6 +188,7 @@ function GuardButton({
   title,
   disabled,
   busy,
+  keepLabel = false,
   onClick,
   tone,
 }: {
@@ -186,6 +196,7 @@ function GuardButton({
   title?: string;
   disabled: boolean;
   busy: boolean;
+  keepLabel?: boolean;
   onClick: () => void;
   tone: "primary" | "ghost" | "danger";
 }) {
@@ -212,7 +223,7 @@ function GuardButton({
         onClick={onClick}
         className={`h-10 rounded-xl px-4 text-sm font-semibold ${disabledClass} ${toneClass}`}
       >
-        {busy ? "…" : label}
+        {busy && !keepLabel ? "…" : label}
       </button>
     </span>
   );

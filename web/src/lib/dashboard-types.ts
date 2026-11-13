@@ -225,6 +225,7 @@ export type VerifiedExecution = {
   timestamp_ns: string;
   tx_hash?: string;
   receipt_hash?: string;
+  proof_tx_hash?: string;
 };
 
 export type VaultInfo = {

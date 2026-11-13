@@ -1,5 +1,6 @@
 import fs from "fs";
 import { aegisStatePath, readTextFile, writeJsonFile } from "./aegis-paths";
+import { isSampleExecution } from "./budget-math";
 
 export const DEFAULT_CONTRACT_ID = "kotha-vault-1793945609.testnet";
 export const FASTNEAR_TESTNET_RPC = "https://test.rpc.fastnear.com";
@@ -9,7 +10,6 @@ export const VIEW_TIMEOUT_MS = 8_000;
 export const RPC_FAIL_CACHE_MS = 5_000;
 const LOG_FILE = "aegis-vault-executions.json";
 const ACTION_TYPES = ["swap", "transfer", "withdraw", "shield", "unshield"] as const;
-const SAMPLE_PREFIX = "aegis-corr-";
 
 function vaultOwnerAccount(): string {
   return process.env.NEXT_PUBLIC_OWNER_ID?.trim() || process.env.NEAR_ACCOUNT_ID?.trim() || process.env.OWNER_ID?.trim() || "owner.kotha.testnet";
@@ -120,7 +120,7 @@ export async function listExecutions(limit = 50): Promise<VerifiedExecution[]> {
   const chain = await tryChain<unknown[]>("list_executions", { from_index: 0, limit });
   const remote = Array.isArray(chain) ? chain.map(normalizeExecution).filter((row): row is VerifiedExecution => row != null) : [];
   return mergeExecutions(remote, local)
-    .filter((row) => !row.correlation_id.startsWith(SAMPLE_PREFIX))
+    .filter((row) => !isSampleExecution(row))
     .slice(0, limit);
 }
 

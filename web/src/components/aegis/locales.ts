@@ -86,7 +86,7 @@ const es: Overlay = {
   swapPreview: "Cambiar {amount} {origin} a {destination}. Salida estimada {out}. Deslizamiento máximo {slippage} bps.",
   swapBlocked: "Este cambio está bloqueado por la política.",
   injectionBlocked:
-    "Inyección de prompt bloqueada. Kotha no ignorará los límites ni enviará todos los fondos. Cortafuegos BLOCKED, riesgo 99. PROHORI_PER_TX_LIMIT_EXCEEDED y PROHORI_DAILY_BUDGET_EXCEEDED.",
+    "Inyección de prompt bloqueada. Kotha no ignorará los límites ni enviará todos los fondos. Cortafuegos BLOCKED, riesgo 99. Supera el límite por transacción y el presupuesto diario.",
 };
 
 const ar: Overlay = {
@@ -175,7 +175,7 @@ const ar: Overlay = {
   swapPreview: "تبديل {amount} {origin} إلى {destination}. الناتج المتوقع {out}. أقصى انزلاق {slippage} bps.",
   swapBlocked: "هذا التبديل محظور بالسياسة.",
   injectionBlocked:
-    "تم حظر حقن الموجّه. لن يتجاهل Kotha الحدود ولن يرسل كل الأموال. الحالة BLOCKED والمخاطر 99. PROHORI_PER_TX_LIMIT_EXCEEDED و PROHORI_DAILY_BUDGET_EXCEEDED.",
+    "تم حظر حقن الموجّه. لن يتجاهل Kotha الحدود ولن يرسل كل الأموال. الحالة BLOCKED والمخاطر 99. يتجاوز حد المعاملة والميزانية اليومية.",
 };
 
 const hi: Overlay = {
@@ -264,7 +264,7 @@ const hi: Overlay = {
   swapPreview: "{amount} {origin} को {destination} में बदलें। अनुमानित आउटपुट {out}। अधिकतम स्लिपेज {slippage} bps।",
   swapBlocked: "नीति ने इस स्वैप को रोक दिया।",
   injectionBlocked:
-    "प्रॉम्प्ट इंजेक्शन रोक दिया गया। Kotha सीमाएँ नहीं भूलेगा और सारा फंड नहीं भेजेगा। BLOCKED, जोखिम 99. PROHORI_PER_TX_LIMIT_EXCEEDED और PROHORI_DAILY_BUDGET_EXCEEDED.",
+    "प्रॉम्प्ट इंजेक्शन रोक दिया गया। Kotha सीमाएँ नहीं भूलेगा और सारा फंड नहीं भेजेगा। BLOCKED, जोखिम 99. यह प्रति-लेनदेन सीमा और दैनिक बजट से अधिक है.",
 };
 
 const fr: Overlay = {
@@ -353,7 +353,7 @@ const fr: Overlay = {
   swapPreview: "Échanger {amount} {origin} contre {destination}. Sortie estimée {out}. Glissement max {slippage} bps.",
   swapBlocked: "Cet échange est bloqué par la politique.",
   injectionBlocked:
-    "Injection de prompt bloquée. Kotha n'ignorera pas les limites et n'enverra pas tous les fonds. Pare-feu BLOCKED, risque 99. PROHORI_PER_TX_LIMIT_EXCEEDED et PROHORI_DAILY_BUDGET_EXCEEDED.",
+    "Injection de prompt bloquée. Kotha n'ignorera pas les limites et n'enverra pas tous les fonds. Pare-feu BLOCKED, risque 99. Cela dépasse le plafond par transaction et le budget quotidien.",
 };
 
 const zh: Overlay = {
@@ -442,7 +442,7 @@ const zh: Overlay = {
   swapPreview: "把 {amount} {origin} 换成 {destination}。预计得到 {out}。最大滑点 {slippage} bps。",
   swapBlocked: "策略已阻止这笔兑换。",
   injectionBlocked:
-    "提示注入已被阻止。Kotha 不会忽略限额，也不会转出全部资金。防火墙 BLOCKED，风险 99。PROHORI_PER_TX_LIMIT_EXCEEDED 与 PROHORI_DAILY_BUDGET_EXCEEDED。",
+    "提示注入已被阻止。Kotha 不会忽略限额，也不会转出全部资金。防火墙 BLOCKED，风险 99。这超出了单笔限额和每日预算。",
 };
 
 export const localeOverlays: Record<string, Overlay | undefined> = { es, ar, hi, fr, zh };

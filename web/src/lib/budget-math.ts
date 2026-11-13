@@ -96,6 +96,48 @@ function centsOf(body: { usd_amount_cents?: unknown; amount_usd?: unknown }): bi
   return null;
 }
 
+const SPEND_EPOCH = "2020-01-01";
+
+export function isSampleExecution(row: { correlation_id?: string; request_sha256?: string; response_sha256?: string }): boolean {
+  const id = row.correlation_id || "";
+  if (id.startsWith("kotha-ci-") || id.startsWith("aegis-corr-")) return true;
+  return placeholderHash(row.request_sha256) || placeholderHash(row.response_sha256);
+}
+
+function placeholderHash(value: string | undefined): boolean {
+  const text = (value || "").trim();
+  return text.length >= 16 && /^(?:a+|b+)$/i.test(text);
+}
+
+/** Sum today's chain executions. Sample rows and timestamps before 2020 do not count. */
+export function chainSpentTodayUsd(
+  rows: Iterable<{
+    correlation_id?: string;
+    request_sha256?: string;
+    response_sha256?: string;
+    timestamp_ns?: string;
+    usd_amount_cents?: string | number;
+  }>,
+  day = utcDayStamp(),
+): number {
+  let cents = 0n;
+  for (const row of rows) {
+    if (isSampleExecution(row)) continue;
+    const stamp = dayFromTimestampNs(String(row.timestamp_ns ?? ""));
+    if (!stamp || stamp < SPEND_EPOCH || stamp !== day) continue;
+    const part = centsFromUnknown(row.usd_amount_cents);
+    if (part == null || part < 0n) continue;
+    cents += part;
+  }
+  return centsToNumber(cents);
+}
+
+function centsFromUnknown(raw: string | number | undefined): bigint | null {
+  if (typeof raw === "string" && /^\d+$/.test(raw)) return BigInt(raw);
+  if (typeof raw === "number" && Number.isFinite(raw) && raw >= 0) return BigInt(Math.round(raw));
+  return null;
+}
+
 function centsToNumber(cents: bigint): number {
   const negative = cents < 0n;
   const abs = negative ? -cents : cents;

@@ -1,4 +1,5 @@
-import type { CopyKey } from "@/components/aegis/copy";
+import { fillCopy, translate, type CopyKey, type Lang } from "@/components/aegis/copy";
+import { humanizeVisibleCodes } from "@/lib/policy-codes";
 import { isNativeNearTransfer } from "@/components/aegis/format";
 import type { AegisIntent } from "@/lib/dashboard-types";
 import { extractE164, isImplicitAccount, isNearAccountId } from "@/lib/near-account";
@@ -60,11 +61,38 @@ export type NativeTransferBatch = {
 
 export type CardOutcome = {
   tone: "ok" | "warn" | "fail";
-  text: string;
+  text?: string;
   transferHash?: string;
   proofHash?: string;
   faucet?: boolean;
+  amount?: string;
+  recipient?: string;
+  proofMissing?: boolean;
+  failKey?: CopyKey;
 };
+
+export type ExecuteAdmission = "start" | "busy" | "sent";
+
+/** A second tap while a wallet request is open, or after this card already sent, must not start another payment. */
+export function executeAdmission(input: { inFlight: boolean; alreadyExecuted: boolean }): ExecuteAdmission {
+  if (input.inFlight) return "busy";
+  if (input.alreadyExecuted) return "sent";
+  return "start";
+}
+
+/** Success and failure copy follows the language on screen, not the language at click time. */
+export function describeExecuteOutcome(lang: Lang, outcome: CardOutcome): string {
+  if (outcome.failKey) {
+    const sentence = translate(lang, outcome.failKey);
+    if (sentence) return humanizeVisibleCodes(lang, sentence);
+  }
+  if (outcome.amount && outcome.recipient && (outcome.tone === "ok" || outcome.tone === "warn")) {
+    const sent = fillCopy(lang, "executeSent", { amount: outcome.amount, recipient: outcome.recipient });
+    const extra = outcome.proofMissing ? translate(lang, "executeProofMissing") : translate(lang, "executedNotice");
+    return humanizeVisibleCodes(lang, `${sent} ${extra}`.trim());
+  }
+  return humanizeVisibleCodes(lang, outcome.text || "");
+}
 
 export type WalletFailureKind = "rejected" | "insufficient" | "unauthorized" | "other";
 

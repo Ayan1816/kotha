@@ -24,7 +24,8 @@ import {
 } from "crypto";
 import fs from "fs";
 import { aegisStatePath, readTextFile, writeJsonFile } from "./aegis-paths";
-import { projectSpend, roundUsd, sumTodayReceiptUsd, utcDayStamp, ZERO_AMOUNT_WARNING } from "./budget-math";
+import { chainSpentTodayUsd, projectSpend, roundUsd, sumTodayReceiptUsd, utcDayStamp, ZERO_AMOUNT_WARNING } from "./budget-math";
+import { listExecutions } from "./near-vault-rpc";
 import { listReceiptRecords } from "./receipt-store";
 import { extractE164, isValidNearAccountId } from "./near-account";
 import { readTransferFields } from "./transfer-parse";
@@ -1634,12 +1635,24 @@ function ensureBudgetWindow(state: PersistedState): void {
 }
 
 async function syncSpentFromReceipts(state: PersistedState): Promise<void> {
+  const day = state.budgetDay || utcDayStamp();
+  let receiptUsd = 0;
   try {
     const records = await listReceiptRecords();
-    state.policy.spentTodayUsd = sumTodayReceiptUsd(Object.values(records), state.budgetDay || utcDayStamp());
+    receiptUsd = sumTodayReceiptUsd(Object.values(records), day);
   } catch {
-    state.policy.spentTodayUsd = 0;
+    receiptUsd = 0;
   }
+  try {
+    const rows = await listExecutions(200);
+    if (rows.length > 0) {
+      state.policy.spentTodayUsd = chainSpentTodayUsd(rows, day);
+      return;
+    }
+  } catch {
+    // An empty or failed chain read keeps the local receipt sum.
+  }
+  state.policy.spentTodayUsd = receiptUsd;
 }
 
 function describeRoute(intent: AegisIntent, origin: string, destination: string, shard: "intents.near" | "intents.far"): string {

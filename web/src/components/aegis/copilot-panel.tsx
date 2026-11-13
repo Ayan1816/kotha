@@ -5,7 +5,8 @@ import { CopyButton, HashRow } from "@/components/aegis/bits";
 import { fillCopy, translate, type CopyKey, type Lang } from "@/components/aegis/copy";
 import { ExecuteBanner } from "@/components/aegis/execute-banner";
 import { actionCopyKey, actionTone, attestationCurl, isNativeNearTransfer, previewSymbol, showSlippageRow, showWnearLine, signatureCurl } from "@/components/aegis/format";
-import { displayReply, LOADER_STEPS, readActionCard, visibleMessageText, type LoaderStep } from "@/lib/chat-stream";
+import { displayReply, LOADER_STEPS, visibleMessageText, type LoaderStep } from "@/lib/chat-stream";
+import { humanizeVisibleCodes } from "@/lib/policy-codes";
 import type { CardOutcome } from "@/lib/native-transfer";
 import { nativeExecuteBlock } from "@/lib/native-transfer";
 import { isLocalPreview } from "@/lib/tee-status";
@@ -70,6 +71,10 @@ export function CopilotPanel({
   onSend,
   onRetry,
   cardOutcomes = {},
+  executeBusy = false,
+  executeCardId = null,
+  executedIds = [],
+  inputsReady = true,
   onRetryTranslate,
   onDryRun,
   onOpenGuard,
@@ -94,6 +99,10 @@ export function CopilotPanel({
   onSend: (text: string, chipKey?: string) => void;
   onRetry?: (id: string) => void;
   cardOutcomes?: Record<string, CardOutcome>;
+  executeBusy?: boolean;
+  executeCardId?: string | null;
+  executedIds?: readonly string[];
+  inputsReady?: boolean;
   onRetryTranslate?: (id: string) => void;
   onDryRun?: (intentId: string) => void;
   onOpenGuard?: (intentId: string) => void;
@@ -420,10 +429,13 @@ export function CopilotPanel({
             </div>
             </div>
           ) : null}
-          {messages.map((message) =>
+          {messages.map((message, index) =>
             message.role === "user" ? (
-              <div key={message.id} className="ml-8 rounded-2xl rounded-br-md border border-[#00D2FF]/25 bg-[#00D2FF]/8 px-3 py-2 text-sm text-white">
-                <div className="mb-1 text-[10px] uppercase tracking-[0.16em] text-[#00D2FF]">{translate(lang, "you")}</div>
+              <div key={message.id} className="ml-8 min-w-0 rounded-2xl rounded-br-md border border-[#00D2FF]/25 bg-[#00D2FF]/8 px-3 py-2 text-sm text-white">
+                <div className="mb-1 flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-[0.16em] text-[#00D2FF]">
+                  <span>{translate(lang, "you")}</span>
+                  {message.chipKey ? <DemoBadge lang={lang} /> : null}
+                </div>
                 {userBubbleText(message, lang)}
                 {!thinking && message.id === messages[messages.length - 1]?.id ? (
                   <button type="button" onClick={() => onRetry?.(message.id)} className="mt-2 block text-xs text-[#7DD3FC] underline-offset-2 hover:underline">
@@ -440,6 +452,11 @@ export function CopilotPanel({
                 ownerReady={ownerReady}
                 executeHint={executeHint}
                 outcome={cardOutcomes[message.id] ?? null}
+                demo={Boolean(messages[index - 1]?.chipKey)}
+                executeBusy={executeBusy}
+                pending={executeCardId === message.id}
+                executed={executedIds.includes(message.id)}
+                inputsReady={inputsReady}
                 onDryRun={onDryRun}
                 onOpenGuard={onOpenGuard}
                 onExecute={onExecute}
@@ -451,7 +468,7 @@ export function CopilotPanel({
             <div className="mr-6 min-w-0 rounded-2xl border border-[#00EC97]/25 bg-black/25 px-3 py-3">
               <StepLoader lang={lang} step={chatStep} />
               <p className="mt-2 min-h-5 whitespace-pre-wrap break-words text-sm leading-relaxed text-white/90">
-                {displayReply(liveText) || translate(lang, "typing")}
+                {humanizeVisibleCodes(lang, displayReply(liveText)) || translate(lang, "typing")}
                 <span className="ml-0.5 inline-block h-[1em] w-px animate-pulse bg-[#00EC97] align-middle" aria-hidden="true" />
               </p>
             </div>
@@ -467,14 +484,15 @@ export function CopilotPanel({
           <p className="mb-2 text-xs text-white/55">
             {walletConnected ? `${translate(lang, "nearBalance")}: ${nearBalance ?? "…"}` : translate(lang, "balanceUnavailable")}
           </p>
-          <div className="flex gap-2 overflow-x-auto pb-1">
+          <div className="flex flex-wrap gap-2 pb-1">
             {CHIPS.map((key) => (
               <button
                 key={key}
                 type="button"
                 onClick={() => submit(translate(lang, key), key)}
-                className="shrink-0 whitespace-nowrap rounded-full border border-white/10 bg-black/25 px-3 py-2 text-sm text-white hover:border-[#00EC97]/40 disabled:opacity-50"
+                className="inline-flex max-w-full flex-wrap items-center gap-1.5 whitespace-normal break-words rounded-full border border-white/10 bg-black/25 px-3 py-2 text-left text-sm text-white hover:border-[#00EC97]/40 disabled:opacity-50"
               >
+                <DemoBadge lang={lang} />
                 {translate(lang, key)}
               </button>
             ))}
@@ -554,6 +572,11 @@ function AssistantBubble({
   ownerReady,
   executeHint,
   outcome,
+  demo = false,
+  executeBusy = false,
+  pending = false,
+  executed = false,
+  inputsReady = true,
   onDryRun,
   onOpenGuard,
   onExecute,
@@ -565,6 +588,11 @@ function AssistantBubble({
   ownerReady: boolean;
   executeHint?: string | null;
   outcome?: CardOutcome | null;
+  demo?: boolean;
+  executeBusy?: boolean;
+  pending?: boolean;
+  executed?: boolean;
+  inputsReady?: boolean;
   onDryRun?: (intentId: string) => void;
   onOpenGuard?: (intentId: string) => void;
   onExecute?: (intentId: string) => void;
@@ -594,7 +622,10 @@ function AssistantBubble({
   const badgeLabel = translate(lang, localPreview ? "localPreview" : serverVerified ? "verifiedBadge" : "unverifiedBadge");
   return (
     <article id={`card-${message.id}`} className="mr-6 min-w-0 max-w-full rounded-2xl border border-white/10 bg-black/25 px-3 py-3">
-      <div className="mb-2 text-[10px] uppercase tracking-[0.16em] text-[#00EC97]">KOTHA</div>
+      <div className="mb-2 flex flex-wrap items-center gap-2 text-[10px] uppercase tracking-[0.16em] text-[#00EC97]">
+        <span>KOTHA</span>
+        {demo ? <DemoBadge lang={lang} /> : null}
+      </div>
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <span
           title={localPreview ? translate(lang, "localPreview") : translate(lang, serverVerified ? "teeVerifiedTip" : "teeUnverifiedTip")}
@@ -643,10 +674,13 @@ function AssistantBubble({
         intent={decision.intent}
         dryRun={message.dryRun}
         dryRunShown={message.dryRunShown === true}
-        fallbackText={body}
         status={decision.policy_status}
         ownerReady={ownerReady}
         executeHint={executeHint}
+        executeBusy={executeBusy}
+        pending={pending}
+        executed={executed}
+        inputsReady={inputsReady}
         onDryRun={onDryRun}
         onOpenGuard={onOpenGuard}
         onExecute={onExecute}
@@ -697,10 +731,13 @@ function ActionCard({
   intent,
   dryRun,
   dryRunShown,
-  fallbackText,
   status,
   ownerReady,
   executeHint,
+  executeBusy = false,
+  pending = false,
+  executed = false,
+  inputsReady = true,
   onDryRun,
   onOpenGuard,
   onExecute,
@@ -710,26 +747,30 @@ function ActionCard({
   intent: AegisIntent | null;
   dryRun?: DryRunPreview | null;
   dryRunShown: boolean;
-  fallbackText: string;
   status: PolicyStatus;
   ownerReady: boolean;
   executeHint?: string | null;
+  executeBusy?: boolean;
+  pending?: boolean;
+  executed?: boolean;
+  inputsReady?: boolean;
   onDryRun?: (intentId: string) => void;
   onOpenGuard?: (intentId: string) => void;
   onExecute?: (intentId: string) => void;
 }) {
   const reasonId = useId();
-  const numeric = Number(intent?.amount);
-  const fromIntent = Number.isFinite(numeric) && numeric > 0;
-  const fromText = readActionCard(fallbackText);
-  if (!fromIntent && !fromText) return null;
+  if (!intent) return null;
   if (status === "BLOCKED") {
     return <p className="mt-3 text-sm text-[#ffb3c0]">{translate(lang, "blockedByPolicy")}</p>;
   }
-  const native = Boolean(intent && isNativeNearTransfer(intent));
-  const blockText = intent && !native ? translate(lang, nativeExecuteBlock(intent) || "executeNativeOnly") : null;
-  const enabled = ownerReady && native && !executeHint;
-  const tip = enabled
+  const native = isNativeNearTransfer(intent);
+  const blockText = native ? null : translate(lang, nativeExecuteBlock(intent) || "executeNativeOnly");
+  const locked = executed || pending || executeBusy;
+  const enabled = ownerReady && native && !executeHint && !locked && inputsReady;
+  const executeLabel = executed ? translate(lang, "executeDone") : pending || executeBusy ? translate(lang, "executeProcessing") : translate(lang, "executeButton");
+  const tip = locked || !inputsReady
+    ? undefined
+    : enabled
     ? undefined
     : executeHint
       ? executeHint
@@ -745,7 +786,7 @@ function ActionCard({
       {intent ? <IntentFacts lang={lang} intent={intent} dryRun={dryRun} /> : null}
       {dryRunShown && dryRun ? (
         <div className="mb-3 rounded-xl border border-white/10 bg-black/30 p-3">
-          <DryRunSummary lang={lang} dryRun={dryRun} />
+          <DryRunSummary lang={lang} dryRun={dryRun} intent={intent} />
           <button type="button" onClick={() => onOpenGuard?.(messageId)} className="mt-2 text-xs text-[#7DD3FC] underline-offset-2 hover:underline">
             {translate(lang, "openInGuard")}
           </button>
@@ -765,7 +806,7 @@ function ActionCard({
             onClick={enabled ? () => onExecute?.(messageId) : undefined}
             className="h-9 rounded-xl bg-[#00EC97] px-3 text-sm font-semibold text-[#04140d] disabled:cursor-not-allowed disabled:bg-[#2a3038] disabled:text-white/45 disabled:opacity-100"
           >
-            {translate(lang, "executeButton")}
+            {executeLabel}
           </button>
         </span>
       </div>
@@ -924,7 +965,19 @@ function policyTip(lang: Lang, status: PolicyStatus, reason: string): string {
   return translate(lang, "blockedByPolicy");
 }
 
+function DemoBadge({ lang }: { lang: Lang }) {
+  return (
+    <span className="inline-flex shrink-0 rounded-full border border-white/20 bg-white/8 px-1.5 py-0.5 text-[10px] font-semibold normal-case tracking-normal text-white/80">
+      {translate(lang, "demoBadge")}
+    </span>
+  );
+}
+
 function visibleText(message: ChatMessage, lang: Lang): string {
+  return humanizeVisibleCodes(lang, visibleBody(message, lang));
+}
+
+function visibleBody(message: ChatMessage, lang: Lang): string {
   if (message.errorCode === "free_limit") return translate(lang, "freeLimit");
   if (message.errorCode === "wallet_limit") return translate(lang, "walletLimit");
   if (message.errorCode === "voice_too_long") return translate(lang, "voiceTooLong");

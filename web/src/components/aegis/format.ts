@@ -84,11 +84,12 @@ export function formatAtomic(atomic: string, decimals: number): string {
 }
 
 export function amountSummary(row: VerifiedExecution): string {
-  const origin = assetLabel(row.origin_asset);
-  const destination = assetLabel(row.destination_asset);
-  const human = formatAtomic(row.amount_atomic, origin.decimals);
-  if (destination.symbol === origin.symbol) return `${human} ${origin.symbol}`;
-  return `${human} ${origin.symbol} → ${destination.symbol}`;
+  const decimals = assetLabel(row.origin_asset).decimals;
+  const origin = previewSymbol(row.origin_asset, row.action_type);
+  const destination = previewSymbol(row.destination_asset, row.action_type);
+  const human = formatAtomic(row.amount_atomic, decimals);
+  if (destination === origin) return `${human} ${origin}`;
+  return `${human} ${origin} → ${destination}`;
 }
 
 export function timestampMs(timestampNs: string): number | null {
@@ -102,9 +103,11 @@ export function timestampMs(timestampNs: string): number | null {
   }
 }
 
+const PLAUSIBLE_MS = Date.UTC(2020, 0, 1);
+
 export function formatTimestamp(timestampNs: string, lang: Lang): string {
   const ms = timestampMs(timestampNs);
-  if (ms == null) return timestampNs;
+  if (ms == null || ms < PLAUSIBLE_MS) return "—";
   return new Date(ms).toLocaleString(DATE_LOCALE[lang], {
     month: "short",
     day: "2-digit",

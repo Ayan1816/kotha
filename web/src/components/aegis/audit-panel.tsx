@@ -1,9 +1,12 @@
 "use client";
 
 import { CopyButton, HashRow } from "@/components/aegis/bits";
-import { fillCopy, translate, type CopyKey, type Lang } from "@/components/aegis/copy";
+import { fillCopy, translate, type Lang } from "@/components/aegis/copy";
 import { actionCopyKey, actionTone, amountSummary, displayRoute, formatTimestamp, getExecutionCommand, isNativeNearTransfer, previewSymbol, shortHash, showSlippageRow, showWnearLine, testnetLabel } from "@/components/aegis/format";
-import { judgeReceipt, readChainExecution, rehashReceipt } from "@/lib/receipt-canonical";
+import { compareChainToReceipt, verifyReasonKey, type VerifyResult } from "@/lib/chain-verify";
+import { isSampleExecution } from "@/lib/budget-math";
+import { humanizeVisibleCodes } from "@/lib/policy-codes";
+import { rehashReceipt } from "@/lib/receipt-canonical";
 import { explorerTxUrl, publicNetwork } from "@/lib/wallet-proof";
 import { AnimatedNumberTicker, ShimmerActionButton, SpotlightGlassCard } from "@/components/ui/aegis-primitives";
 import type { AegisIntent, AttestedInference, DryRunPreview, ExecutionResult, VerifiedExecution } from "@/lib/dashboard-types";
@@ -50,7 +53,7 @@ export function AuditPanel({
   onPhoneBookChange?: () => void;
   onExecute: () => void;
   onRefresh: () => void;
-  onVerifyChain: (correlationId: string, receiptHash?: string) => Promise<"match" | "mismatch">;
+  onVerifyChain: (correlationId: string) => Promise<VerifyResult>;
 }) {
   return (
     <div className="flex flex-col gap-3">
@@ -90,7 +93,7 @@ export function AuditPanel({
               ) : null}
               {chainLink && chainLink.id === execution.correlation_id ? (
                 <div className="mt-2">
-                  <ChainVerifyButton lang={lang} onClick={() => onVerifyChain(execution.correlation_id, chainLink.receiptHash)} />
+                  <ChainVerifyButton lang={lang} onClick={() => onVerifyChain(execution.correlation_id)} />
                 </div>
               ) : null}
             </div>
@@ -160,11 +163,7 @@ export function formatWarning(lang: Lang, warning: string): string {
   if (warning.startsWith("PROHORI_DAILY_BUDGET_EXCEEDED") && nums.length >= 4) {
     return fillCopy(lang, "prohoriDaily", { spent: nums[0], tx: nums[1], projected: nums[2], daily: nums[3] });
   }
-  if (warning.startsWith("PROHORI_PER_TX_LIMIT_EXCEEDED")) return fillCopy(lang, "prohoriPerTx", { tx: "", cap: "" });
-  if (warning.startsWith("PROHORI_DAILY_BUDGET_EXCEEDED")) {
-    return fillCopy(lang, "prohoriDaily", { spent: "", tx: "", projected: "", daily: "" });
-  }
-  return warning;
+  return humanizeVisibleCodes(lang, warning);
 }
 
 export function dryRunLabel(lang: Lang, dryRun: DryRunPreview): string {
@@ -178,9 +177,9 @@ export function DryRunChecks({ lang, dryRun }: { lang: Lang; dryRun: DryRunPrevi
   return (
     <ul className="mt-3 space-y-1 text-xs">
       {dryRun.checks.map((check) => (
-        <li key={check.code} className="flex items-center justify-between gap-3">
-          <span className="text-white/70">{translate(lang, CHECK_LABEL[check.code])}</span>
-          <span className={check.result === "FAIL" ? "text-[#ffb3c0]" : check.result === "SKIPPED" ? "text-[#ffd7a1]" : "text-[#00EC97]"}>
+        <li key={check.code} className="flex min-w-0 items-start justify-between gap-3">
+          <span className="min-w-0 break-words text-white/70">{translate(lang, CHECK_LABEL[check.code])}</span>
+          <span className={`shrink-0 ${check.result === "FAIL" ? "text-[#ffb3c0]" : check.result === "SKIPPED" ? "text-[#ffd7a1]" : "text-[#00EC97]"}`}>
             {check.result === "SKIPPED" ? translate(lang, "balanceSkipped") : check.result === "FAIL" ? translate(lang, "checkFail") : translate(lang, "pass")}
           </span>
         </li>
@@ -193,11 +192,15 @@ function warningLabel(lang: Lang, warning: string): string {
   return formatWarning(lang, warning);
 }
 
-export function DryRunSummary({ lang, dryRun }: { lang: Lang; dryRun: DryRunPreview }) {
+export function DryRunSummary({ lang, dryRun, intent }: { lang: Lang; dryRun: DryRunPreview; intent?: AegisIntent | null }) {
   const impact = dryRun.budgetImpact;
   const remaining = Math.max(0, impact.dailyLimitUsd - impact.projectedSpentUsd);
+  const intentLine = intent
+    ? `${translate(lang, actionCopyKey(intent.action))} · ${intent.amount} ${previewSymbol(intent.origin_asset, intent.action)}${intent.recipient ? ` · ${intent.recipient}` : ""}`
+    : "";
   return (
-    <div>
+    <div className="min-w-0">
+      {intentLine ? <p className="min-w-0 break-words text-sm text-white">{intentLine}</p> : null}
       <DryRunChecks lang={lang} dryRun={dryRun} />
       <p className="mt-2 text-sm text-white">
         {translate(lang, "projectedSpend")} ${impact.projectedSpentUsd.toFixed(2)} = {translate(lang, "usedToday")} ${impact.currentSpentUsd.toFixed(2)} + ${impact.txUsd.toFixed(2)}
@@ -292,15 +295,24 @@ export function ProofsTable({
   highlight,
   onVerifyChain,
   network = publicNetwork(),
+  loading = false,
 }: {
   lang: Lang;
   executions: VerifiedExecution[];
   contractId: string;
   highlight: string | null;
-  onVerifyChain: (correlationId: string, receiptHash?: string) => Promise<"match" | "mismatch">;
+  onVerifyChain: (correlationId: string) => Promise<VerifyResult>;
   network?: "mainnet" | "testnet";
+  loading?: boolean;
 }) {
-  const rows = Array.isArray(executions) ? executions : [];
+  if (loading) {
+    return (
+      <div className="rounded-2xl border border-white/10 bg-[#07110d] px-4 py-6 text-base text-white/60 shadow-[0_16px_40px_rgba(0,0,0,0.35)]">
+        {translate(lang, "dashboardLoading")}
+      </div>
+    );
+  }
+  const rows = (Array.isArray(executions) ? executions : []).filter((row) => !isSampleExecution(row));
   if (rows.length === 0) {
     return (
       <div className="rounded-2xl border border-white/10 bg-[#07110d] px-4 py-6 text-base text-white/60 shadow-[0_16px_40px_rgba(0,0,0,0.35)]">
@@ -351,18 +363,20 @@ function ProofRow({
   row: VerifiedExecution;
   contractId: string;
   highlight: boolean;
-  onVerifyChain: (correlationId: string, receiptHash?: string) => Promise<"match" | "mismatch">;
+  onVerifyChain: (correlationId: string) => Promise<VerifyResult>;
   network: "mainnet" | "testnet";
 }) {
-  const [chain, setChain] = useState<"idle" | "checking" | "match" | "mismatch">("idle");
+  const [chain, setChain] = useState<"idle" | "checking" | "match" | "mismatch" | "missing">("idle");
+  const [reason, setReason] = useState("");
   const [verifyDetail, setVerifyDetail] = useState("");
   const command = getExecutionCommand(contractId, row.correlation_id);
   const txUrl = row.tx_hash ? explorerTxUrl(row.tx_hash, network) : "";
+  const proofUrl = row.proof_tx_hash ? explorerTxUrl(row.proof_tx_hash, network) : "";
   return (
     <>
       <tr id={`exec-${row.correlation_id}`} className={`scroll-mt-24 border-b border-white/8 ${highlight ? "bg-[#00EC97]/10" : ""}`}>
         <td className="whitespace-nowrap px-4 py-3 text-sm text-white">{formatTimestamp(row.timestamp_ns, lang)}</td>
-        <td className="whitespace-nowrap px-4 py-3 text-sm text-white">{row.action_type}</td>
+        <td className="whitespace-nowrap px-4 py-3 text-sm text-white">{translate(lang, actionCopyKey(row.action_type))}</td>
         <td className="max-w-48 px-4 py-3 text-sm break-words text-white">{amountSummary(row)}</td>
         <td className="whitespace-nowrap px-4 py-3 text-sm text-[#00EC97]">{translate(lang, "statusRecorded")}</td>
         <td className="px-4 py-3 text-sm">
@@ -379,9 +393,16 @@ function ProofRow({
             type="button"
             onClick={() => {
               setChain("checking");
-              void onVerifyChain(row.correlation_id, row.receipt_hash)
-                .then(setChain)
-                .catch(() => setChain("mismatch"));
+              setReason("");
+              void onVerifyChain(row.correlation_id)
+                .then((result) => {
+                  setChain(result.status);
+                  setReason(result.status === "mismatch" ? translate(lang, verifyReasonKey(result.code)) : "");
+                })
+                .catch(() => {
+                  setChain("mismatch");
+                  setReason(translate(lang, "verifyResponse"));
+                });
             }}
             className="rounded-xl border border-white/15 px-3 py-1 text-sm text-white hover:border-[#00EC97]/50"
           >
@@ -389,7 +410,13 @@ function ProofRow({
             {chain === "checking" ? " …" : ""}
           </button>
           {chain === "match" ? <div className="mt-1 text-sm text-[#00EC97]">{translate(lang, "chainMatch")}</div> : null}
-          {chain === "mismatch" ? <div className="mt-1 text-sm text-[#ffb3c0]">{translate(lang, "chainMismatch")}</div> : null}
+          {chain === "missing" ? <div className="mt-1 break-words text-sm text-[#ffd7a1]">{translate(lang, "chainMissing")}</div> : null}
+          {chain === "mismatch" ? (
+            <div className="mt-1 break-words text-sm text-[#ffb3c0]">
+              {translate(lang, "chainMismatch")}
+              {reason ? ` ${reason}` : ""}
+            </div>
+          ) : null}
         </td>
       </tr>
       <tr className="border-b border-white/8">
@@ -403,6 +430,11 @@ function ProofRow({
               <HashRow lang={lang} label={translate(lang, "requestHash")} value={row.request_sha256} />
               <HashRow lang={lang} label={translate(lang, "responseHash")} value={row.response_sha256} />
               {row.receipt_hash ? <HashRow lang={lang} label={translate(lang, "receiptHash")} value={row.receipt_hash} /> : null}
+              {proofUrl ? (
+                <a href={proofUrl} target="_blank" rel="noreferrer" className="block break-all text-sm text-[#7DD3FC] underline-offset-2 hover:underline">
+                  {translate(lang, "executeProofLink")}
+                </a>
+              ) : null}
               <HashRow lang={lang} label={translate(lang, "signature")} value={row.tee_signature} />
               <CopyButton value={command} lang={lang} label={translate(lang, "cli")} />
               <button
@@ -429,16 +461,21 @@ function ProofRow({
   );
 }
 
-function ChainVerifyButton({ lang, onClick }: { lang: Lang; onClick: () => Promise<"match" | "mismatch"> }) {
-  const [state, setState] = useState<"idle" | "checking" | "match" | "mismatch">("idle");
+function ChainVerifyButton({ lang, onClick }: { lang: Lang; onClick: () => Promise<VerifyResult> }) {
+  const [state, setState] = useState<"idle" | "checking" | "match" | "mismatch" | "missing">("idle");
+  const [reason, setReason] = useState("");
   return (
     <div className="flex flex-col gap-1">
       <button
         type="button"
         onClick={() => {
           setState("checking");
+          setReason("");
           void onClick()
-            .then(setState)
+            .then((result) => {
+              setState(result.status);
+              setReason(result.status === "mismatch" ? translate(lang, verifyReasonKey(result.code)) : "");
+            })
             .catch(() => setState("mismatch"));
         }}
         className="inline-flex items-center justify-center gap-2 whitespace-normal break-words rounded-md border border-white/10 px-2 py-2 text-center text-[10px] leading-snug text-white/75 hover:border-[#00EC97]/40"
@@ -451,9 +488,15 @@ function ChainVerifyButton({ lang, onClick }: { lang: Lang; onClick: () => Promi
           {translate(lang, "chainMatch")}
         </span>
       ) : null}
+      {state === "missing" ? (
+        <span className="inline-flex w-fit max-w-full break-words rounded-full bg-[#FF8A00]/15 px-2 py-0.5 text-[10px] font-semibold text-[#ffd7a1]">
+          {translate(lang, "chainMissing")}
+        </span>
+      ) : null}
       {state === "mismatch" ? (
-        <span className="inline-flex w-fit rounded-full bg-[#FF3B5C]/15 px-2 py-0.5 text-[10px] font-semibold text-[#ffb3c0]">
+        <span className="inline-flex w-fit max-w-full break-words rounded-full bg-[#FF3B5C]/15 px-2 py-0.5 text-[10px] font-semibold text-[#ffb3c0]">
           {translate(lang, "chainMismatch")}
+          {reason ? ` ${reason}` : ""}
         </span>
       ) : null}
     </div>
@@ -485,23 +528,6 @@ function MetaRow({ label, value }: { label: string; value: string }) {
   );
 }
 
-const RECEIPT_REASON: Record<string, CopyKey> = {
-  "Downloaded receipt hash does not match its canonical JSON.": "receiptHashMismatch",
-  "get_execution returned no record.": "chainMissing",
-  "receipt_hash does not match get_execution.": "chainReceiptMismatch",
-  "intent hash does not match get_execution.": "chainIntentMismatch",
-  "chat_id does not match get_execution.": "chainChatMismatch",
-  "action does not match get_execution.": "chainActionMismatch",
-  "amount_usd does not match get_execution.": "chainAmountMismatch",
-  "timestamp does not match get_execution.": "chainTimeMismatch",
-  "receipt_hash matches get_execution.": "chainReceiptMatch",
-};
-
-function localizedReason(lang: Lang, reason: string): string {
-  const key = RECEIPT_REASON[reason];
-  return key ? translate(lang, key) : reason;
-}
-
 async function verifyStoredReceipt(
   lang: Lang,
   id: string,
@@ -523,11 +549,26 @@ async function verifyStoredReceipt(
       setDetail(translate(lang, "receiptBadJson"));
       return;
     }
+    if (hashed.recomputed !== hashed.embedded.toLowerCase()) {
+      setState("mismatch");
+      setDetail(translate(lang, "receiptHashMismatch"));
+      return;
+    }
     const chainResponse = await fetch(`/api/vault/execution?id=${encodeURIComponent(id)}`, { cache: "no-store" });
     const chainBody = (await chainResponse.json().catch(() => null)) as { raw?: string | null } | null;
-    const verdict = judgeReceipt(hashed.receipt, hashed.embedded, hashed.recomputed, readChainExecution(chainBody?.raw || ""));
-    setState(verdict.match ? "match" : "mismatch");
-    setDetail(localizedReason(lang, verdict.reason));
+    const verdict = compareChainToReceipt(chainBody?.raw ?? null, { receipt: hashed.receipt });
+    if (verdict.status === "missing") {
+      setState("mismatch");
+      setDetail(translate(lang, "chainMissing"));
+      return;
+    }
+    if (verdict.status === "match") {
+      setState("match");
+      setDetail(translate(lang, "chainMatch"));
+      return;
+    }
+    setState("mismatch");
+    setDetail(`${translate(lang, "chainMismatch")} ${translate(lang, verifyReasonKey(verdict.code))}`);
   } catch (error) {
     setState("mismatch");
     setDetail(error instanceof Error ? error.message : translate(lang, "verifyFailed"));

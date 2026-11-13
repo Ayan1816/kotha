@@ -12,7 +12,7 @@ function renderProofs(lang: "en" | "bn", executions: VerifiedExecution[]) {
       executions,
       contractId: "kotha.testnet",
       highlight: null,
-      onVerifyChain: async () => "match" as const,
+      onVerifyChain: async () => ({ status: "match", code: "match" }) as const,
     }),
   );
 }
@@ -27,8 +27,8 @@ const sample: VerifiedExecution = {
   usd_amount_cents: "1000",
   near_ai_chat_id: "chat-1",
   tee_signing_address: "0xabc",
-  request_sha256: "a".repeat(64),
-  response_sha256: "b".repeat(64),
+  request_sha256: "c1".repeat(32),
+  response_sha256: "d2".repeat(32),
   tee_signature: "sig",
   timestamp_ns: "1700000000000000000",
 };
@@ -70,6 +70,6 @@ test("Spending Guard warnings fill the real dollar amounts", () => {
 test("Proofs lists a recorded execution when one exists", () => {
   const html = renderProofs("en", [sample]);
   assert.match(html, /<table/);
-  assert.match(html, />swap</);
+  assert.match(html, />Swap</);
   assert.equal(html.includes("Proofs appear here"), false);
 });
