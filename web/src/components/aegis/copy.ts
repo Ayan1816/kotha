@@ -335,7 +335,7 @@ const en = {
   prohoriPerTx: "This transaction is ${tx} and the per-transaction cap is ${cap}.",
   prohoriDaily: "Spent today is ${spent}, this transaction is ${tx}, projected ${projected} of the ${daily} daily limit.",
   limitBlocked: "{action} of {amount} {asset} (~${tx}) is blocked. {details}",
-  nearSettles: "Settles as wNEAR (nep141:wrap.near).",
+  nearSettles: "Testnet preview. Settles as wNEAR (nep141:wrap.testnet).",
   demoTestnet: "demo (testnet)",
   nativeNear: "Native NEAR transfer",
   localPreview: "Local preview (no AI call)",
@@ -379,6 +379,15 @@ const en = {
   verifyChat: "Chat id differs.",
   verifyAgent: "Agent differs.",
   verifyNoReceipt: "No saved receipt to compare.",
+  adminRejected: "That code was not accepted.",
+  adminRateLimited: "Too many tries. Wait a minute.",
+  adminUnconfigured: "Admin mode is not configured.",
+  proofInvalid: "Wallet proof was rejected.",
+  proofExpired: "Wallet proof expired. Try again.",
+  invalidTx: "Receipt id and transaction hash are required.",
+  receiptNotFound: "No frozen receipt is stored for that id.",
+  invalidFreeze: "Freeze request was not accepted.",
+  ownerRequired: "Connect the vault owner wallet.",
 } as const;
 
 export type CopyKey = keyof typeof en;
@@ -715,7 +724,7 @@ const bn: { [K in CopyKey]: string } = {
   prohoriPerTx: "এই লেনদেন {tx} ডলার এবং প্রতি-লেনদেন সীমা {cap} ডলার।",
   prohoriDaily: "আজ খরচ {spent} ডলার, এই লেনদেন {tx} ডলার, প্রক্ষেপিত {projected} ডলার, দৈনিক সীমা {daily} ডলার।",
   limitBlocked: "{amount} {asset} (~{tx} ডলার) {action} আটকানো হয়েছে। {details}",
-  nearSettles: "কারিগরি হিসাবে wNEAR (nep141:wrap.near)।",
+  nearSettles: "টেস্টনেট প্রিভিউ। কারিগরি হিসাবে wNEAR (nep141:wrap.testnet)।",
   demoTestnet: "ডেমো (টেস্টনেট)",
   nativeNear: "নেটিভ NEAR ট্রান্সফার",
   localPreview: "স্থানীয় প্রিভিউ (কোনো এআই কল নয়)",
@@ -759,6 +768,15 @@ const bn: { [K in CopyKey]: string } = {
   verifyChat: "কথোপকথন মিলেনি।",
   verifyAgent: "এজেন্ট মিলেনি।",
   verifyNoReceipt: "তুলনা করার রসিদ নেই।",
+  adminRejected: "এই কোড গ্রহণ করা হয়নি।",
+  adminRateLimited: "অনেকবার চেষ্টা হয়েছে। এক মিনিট অপেক্ষা করুন।",
+  adminUnconfigured: "অ্যাডমিন মোড সেট করা নেই।",
+  proofInvalid: "ওয়ালেট প্রমাণ বাতিল হয়েছে।",
+  proofExpired: "ওয়ালেট প্রমাণের মেয়াদ শেষ। আবার চেষ্টা করুন।",
+  invalidTx: "রসিদ আইডি ও লেনদেনের হ্যাশ দরকার।",
+  receiptNotFound: "এই আইডির কোনো সংরক্ষিত রসিদ নেই।",
+  invalidFreeze: "স্থগিত করার অনুরোধ গ্রহণ হয়নি।",
+  ownerRequired: "ভল্ট মালিকের ওয়ালেট সংযুক্ত করুন।",
 };
 
 export function translate(lang: Lang, key: CopyKey): string {

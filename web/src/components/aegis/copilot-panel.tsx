@@ -7,8 +7,9 @@ import { ExecuteBanner } from "@/components/aegis/execute-banner";
 import { actionCopyKey, actionTone, attestationCurl, isNativeNearTransfer, previewSymbol, showSlippageRow, showWnearLine, signatureCurl } from "@/components/aegis/format";
 import { displayReply, LOADER_STEPS, visibleMessageText, type LoaderStep } from "@/lib/chat-stream";
 import { humanizeVisibleCodes } from "@/lib/policy-codes";
+import type { AccountViewStatus } from "@/lib/account-view";
 import type { CardOutcome } from "@/lib/native-transfer";
-import { nativeExecuteBlock } from "@/lib/native-transfer";
+import { namedAccountMustExist, nativeExecuteBlock } from "@/lib/native-transfer";
 import { isLocalPreview } from "@/lib/tee-status";
 import { recordedBlobToWav, voiceExceedsLimit } from "@/lib/wav";
 import { cn } from "@/lib/utils";
@@ -75,6 +76,7 @@ export function CopilotPanel({
   executeCardId = null,
   executedIds = [],
   inputsReady = true,
+  accountGate = {},
   onRetryTranslate,
   onDryRun,
   onOpenGuard,
@@ -103,6 +105,7 @@ export function CopilotPanel({
   executeCardId?: string | null;
   executedIds?: readonly string[];
   inputsReady?: boolean;
+  accountGate?: Record<string, AccountViewStatus>;
   onRetryTranslate?: (id: string) => void;
   onDryRun?: (intentId: string) => void;
   onOpenGuard?: (intentId: string) => void;
@@ -457,6 +460,7 @@ export function CopilotPanel({
                 pending={executeCardId === message.id}
                 executed={executedIds.includes(message.id)}
                 inputsReady={inputsReady}
+                accountGate={accountGate}
                 onDryRun={onDryRun}
                 onOpenGuard={onOpenGuard}
                 onExecute={onExecute}
@@ -577,6 +581,7 @@ function AssistantBubble({
   pending = false,
   executed = false,
   inputsReady = true,
+  accountGate = {},
   onDryRun,
   onOpenGuard,
   onExecute,
@@ -593,6 +598,7 @@ function AssistantBubble({
   pending?: boolean;
   executed?: boolean;
   inputsReady?: boolean;
+  accountGate?: Record<string, AccountViewStatus>;
   onDryRun?: (intentId: string) => void;
   onOpenGuard?: (intentId: string) => void;
   onExecute?: (intentId: string) => void;
@@ -681,6 +687,7 @@ function AssistantBubble({
         pending={pending}
         executed={executed}
         inputsReady={inputsReady}
+        accountStatus={accountStatusFor(decision.intent, decision.policy_status, accountGate)}
         onDryRun={onDryRun}
         onOpenGuard={onOpenGuard}
         onExecute={onExecute}
@@ -725,6 +732,17 @@ function AssistantBubble({
   );
 }
 
+function accountStatusFor(
+  intent: AegisIntent | null | undefined,
+  status: string,
+  gate: Record<string, AccountViewStatus>,
+): AccountViewStatus | "checking" | null {
+  if (status === "BLOCKED" || !intent || !isNativeNearTransfer(intent)) return null;
+  const recipient = intent.recipient.trim();
+  if (!namedAccountMustExist(recipient)) return null;
+  return gate[recipient] ?? "checking";
+}
+
 function ActionCard({
   lang,
   messageId,
@@ -738,6 +756,7 @@ function ActionCard({
   pending = false,
   executed = false,
   inputsReady = true,
+  accountStatus = null,
   onDryRun,
   onOpenGuard,
   onExecute,
@@ -754,6 +773,7 @@ function ActionCard({
   pending?: boolean;
   executed?: boolean;
   inputsReady?: boolean;
+  accountStatus?: AccountViewStatus | "checking" | null;
   onDryRun?: (intentId: string) => void;
   onOpenGuard?: (intentId: string) => void;
   onExecute?: (intentId: string) => void;
@@ -765,22 +785,26 @@ function ActionCard({
   }
   const native = isNativeNearTransfer(intent);
   const blockText = native ? null : translate(lang, nativeExecuteBlock(intent) || "executeNativeOnly");
+  const accountHold = accountStatus === "missing" || accountStatus === "unknown" || accountStatus === "checking";
+  const accountCopy = accountStatus === "missing" ? translate(lang, "executeAccountMissing") : accountStatus === "unknown" ? translate(lang, "executeCheckFailed") : null;
   const locked = executed || pending || executeBusy;
-  const enabled = ownerReady && native && !executeHint && !locked && inputsReady;
+  const enabled = ownerReady && native && !executeHint && !locked && inputsReady && !accountHold;
   const executeLabel = executed ? translate(lang, "executeDone") : pending || executeBusy ? translate(lang, "executeProcessing") : translate(lang, "executeButton");
   const tip = locked || !inputsReady
     ? undefined
-    : enabled
-    ? undefined
-    : executeHint
-      ? executeHint
-      : blockText
-        ? blockText
-        : status === "INSUFFICIENT_BALANCE"
-          ? translate(lang, "lowBalance")
-          : !ownerReady
-            ? translate(lang, "connectOwner")
-            : translate(lang, "blockedByPolicy");
+    : accountHold
+      ? accountCopy || undefined
+      : enabled
+      ? undefined
+      : executeHint
+        ? executeHint
+        : blockText
+          ? blockText
+          : status === "INSUFFICIENT_BALANCE"
+            ? translate(lang, "lowBalance")
+            : !ownerReady
+              ? translate(lang, "connectOwner")
+              : translate(lang, "blockedByPolicy");
   return (
     <div className="mt-3 rounded-2xl border border-white/10 bg-black/30 p-3">
       {intent ? <IntentFacts lang={lang} intent={intent} dryRun={dryRun} /> : null}
@@ -793,7 +817,14 @@ function ActionCard({
         </div>
       ) : null}
       <div className="flex flex-wrap gap-2">
-        <button type="button" onClick={() => onDryRun?.(messageId)} className="h-9 rounded-xl border border-white/15 px-3 text-sm text-white">
+        <button
+          type="button"
+          disabled={accountHold}
+          onClick={() => {
+            if (!accountHold) onDryRun?.(messageId);
+          }}
+          className="h-9 rounded-xl border border-white/15 px-3 text-sm text-white disabled:cursor-not-allowed disabled:opacity-40"
+        >
           {translate(lang, "dryRun")}
         </button>
         <span className="inline-flex">

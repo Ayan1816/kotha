@@ -105,6 +105,72 @@ export function rememberWalletSend(entry: LedgerEntry, outcome: CardOutcome): Wa
   return next;
 }
 
+const PENDING_KEY = "kotha-pending-send";
+
+export type PendingSend = {
+  correlationId: string;
+  cardId: string;
+  amount: string;
+  recipient: string;
+};
+
+function asPending(value: unknown): PendingSend | null {
+  if (!value || typeof value !== "object") return null;
+  const row = value as Partial<PendingSend>;
+  if (typeof row.correlationId !== "string" || !row.correlationId) return null;
+  return {
+    correlationId: row.correlationId,
+    cardId: typeof row.cardId === "string" ? row.cardId : "",
+    amount: typeof row.amount === "string" ? row.amount : "",
+    recipient: typeof row.recipient === "string" ? row.recipient : "",
+  };
+}
+
+function readPendingRaw(storage: Storage): PendingSend | null {
+  try {
+    const raw = storage.getItem(PENDING_KEY);
+    if (!raw) return null;
+    return asPending(JSON.parse(raw) as unknown);
+  } catch {
+    return null;
+  }
+}
+
+/** Written before the wallet redirect so a destroyed JS context can still attach the hash. */
+export function rememberPendingSend(pending: PendingSend): void {
+  if (typeof window === "undefined") return;
+  const raw = JSON.stringify(pending);
+  try {
+    window.sessionStorage.setItem(PENDING_KEY, raw);
+  } catch {
+    // sessionStorage can be blocked. localStorage is the second copy.
+  }
+  try {
+    window.localStorage.setItem(PENDING_KEY, raw);
+  } catch {
+    // A full quota must not block the send that is about to start.
+  }
+}
+
+export function readPendingSend(): PendingSend | null {
+  if (typeof window === "undefined") return null;
+  return readPendingRaw(window.sessionStorage) || readPendingRaw(window.localStorage);
+}
+
+export function clearPendingSend(): void {
+  if (typeof window === "undefined") return;
+  try {
+    window.sessionStorage.removeItem(PENDING_KEY);
+  } catch {
+    // Ignore a blocked store.
+  }
+  try {
+    window.localStorage.removeItem(PENDING_KEY);
+  } catch {
+    // Ignore a blocked store.
+  }
+}
+
 export function mergeTransferHashes<T extends { correlation_id: string; tx_hash?: string; proof_tx_hash?: string }>(rows: T[], entries: readonly LedgerEntry[]): T[] {
   if (entries.length === 0) return rows;
   const byId = new Map(entries.map((entry) => [entry.correlationId, entry]));

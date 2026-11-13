@@ -2,16 +2,19 @@
 
 import { useKothaSession } from "@/app/providers";
 import { ApiKeyCard } from "@/components/aegis/api-key-card";
-import { DeckRequestError, fetchDashboard, fetchTeeCatalog, postAdminLock, postAdminUnlock, postDryRun, postFreeze, postGrant, postLocalPreview, postPolicy, postTeeChatStream, postTranslateMany } from "@/components/aegis/api";
+import { DeckRequestError, fetchDashboard, fetchTeeCatalog, postAdminLock, postAdminUnlock, postDryRun, postFreeze, postGrant, postLocalPreview, postPolicy, postSaveTx, postTeeChatStream, postTranslateMany } from "@/components/aegis/api";
 import { ProofsTable, dryRunIsBlocked, formatWarning, type ChainLink } from "@/components/aegis/audit-panel";
 import { CopilotPanel, isChipKey, usesFixedPreviewCopy, type ChatMessage } from "@/components/aegis/copilot-panel";
 import { translate, type CopyKey, type Lang } from "@/components/aegis/copy";
+import { isNativeNearTransfer } from "@/components/aegis/format";
 import { PhoneBook } from "@/components/aegis/phone-book";
 import { PolicyPanel } from "@/components/aegis/policy-panel";
 import { SpendingGuard } from "@/components/aegis/spending-guard";
 import { TelemetryBar } from "@/components/aegis/telemetry-bar";
 import { ShimmerActionButton } from "@/components/ui/aegis-primitives";
+import { viewAccountStatus, type AccountViewStatus } from "@/lib/account-view";
 import { invalidAmountReason } from "@/lib/budget-math";
+import { noticeForApiError } from "@/lib/deck-errors";
 import { compareChainToReceipt, type VerifyResult } from "@/lib/chain-verify";
 import { acceptedTranslation, displayReply, withoutStaleSwapRefusals, type LoaderStep } from "@/lib/chat-stream";
 import { selectArmedQuote } from "@/lib/guard-quote";
@@ -39,7 +42,8 @@ import {
 } from "@/lib/native-transfer";
 import { overallTeePhase } from "@/lib/tee-status";
 import { resolveRemittance } from "@/lib/phone-resolver";
-import { mergeTransferHashes, persistCardOutcome, readWalletLedger, rememberWalletSend, type LedgerEntry } from "@/lib/wallet-ledger";
+import { clearPendingSend, mergeTransferHashes, persistCardOutcome, readPendingSend, readWalletLedger, rememberPendingSend, rememberWalletSend, type LedgerEntry } from "@/lib/wallet-ledger";
+import { parseWalletReturnHashes, stripWalletReturnParams } from "@/lib/wallet-return";
 import {
   configuredOwnerId,
   isInsufficientBalance,
@@ -114,6 +118,12 @@ export function CommandDeck() {
   const chatActive = useRef(false);
   const executeFlight = useRef(false);
   const executedRef = useRef(new Set<string>());
+  const refreshFlight = useRef<Promise<DashboardResponse | null> | null>(null);
+  const lastRefreshAt = useRef(0);
+  const accountChecks = useRef(new Set<string>());
+  const langRef = useRef(lang);
+  langRef.current = lang;
+  const [accountGate, setAccountGate] = useState<Record<string, AccountViewStatus>>({});
 
   const frozen = dashboard?.agentState.frozen ?? dashboard?.agentState.policy.frozen ?? false;
   const accountId = (near.signedAccountId || "").trim();
@@ -239,11 +249,78 @@ export function CommandDeck() {
     return () => window.clearTimeout(timer);
   }, [thinking, chatStep]);
 
-  const refresh = useCallback(async () => {
-    const next = await fetchDashboard();
-    setDashboard(next);
-    return next;
+  const refresh = useCallback(async (force = false): Promise<DashboardResponse | null> => {
+    if (refreshFlight.current) return refreshFlight.current;
+    if (!force && Date.now() - lastRefreshAt.current < 1500) return null;
+    const run = fetchDashboard()
+      .then((next) => {
+        lastRefreshAt.current = Date.now();
+        setDashboard(next);
+        return next;
+      })
+      .finally(() => {
+        refreshFlight.current = null;
+      });
+    refreshFlight.current = run;
+    return run;
   }, []);
+
+  const refreshUntil = useCallback(
+    async (correlationId: string) => {
+      const gaps = [0, 4000, 5000, 5000];
+      for (const gap of gaps) {
+        if (gap) await new Promise((resolve) => window.setTimeout(resolve, gap));
+        try {
+          const next = await refresh(true);
+          if (next?.executions.some((row) => row.correlation_id === correlationId)) return;
+        } catch {
+          // list_executions can lag the send. The next gap tries again.
+        }
+      }
+    },
+    [refresh],
+  );
+
+  const recoverWalletReturn = useCallback(async () => {
+    const parsed = parseWalletReturnHashes(window.location.search, window.location.hash);
+    if (parsed.transferHash) {
+      const pending = readPendingSend();
+      const nextUrl = stripWalletReturnParams(window.location.href);
+      window.history.replaceState(window.history.state, "", nextUrl);
+      if (pending) {
+        const proofMissing = !parsed.proofHash;
+        const outcome: CardOutcome = {
+          tone: proofMissing ? "warn" : "ok",
+          amount: pending.amount,
+          recipient: pending.recipient,
+          proofMissing,
+          transferHash: parsed.transferHash,
+          proofHash: parsed.proofHash || undefined,
+        };
+        const stored = rememberWalletSend(
+          {
+            cardId: pending.cardId,
+            correlationId: pending.correlationId,
+            transferHash: parsed.transferHash,
+            proofHash: parsed.proofHash,
+            amount: pending.amount,
+            recipient: pending.recipient,
+            proofMissing,
+          },
+          outcome,
+        );
+        if (pending.cardId) executedRef.current.add(pending.cardId);
+        setExecutedIds(stored.executedIds);
+        setLedgerEntries(stored.entries);
+        setCardOutcomes((current) => (pending.cardId ? { ...current, [pending.cardId]: outcome } : current));
+        clearPendingSend();
+        void postSaveTx(pending.correlationId, parsed.transferHash, null, parsed.proofHash).catch(() => undefined);
+        await refreshUntil(pending.correlationId);
+        return;
+      }
+    }
+    await refresh(false);
+  }, [refresh, refreshUntil]);
 
   const openDeck = useCallback(async () => {
     const [dash, tee] = await Promise.all([fetchDashboard(), fetchTeeCatalog()]);
@@ -259,7 +336,7 @@ export function CommandDeck() {
     void openDeck()
       .catch((error: unknown) => {
         if (!live) return;
-        setLoadError(error instanceof Error ? error.message : translate("en", "loadFail"));
+        setLoadError(noticeForApiError(langRef.current, error));
       })
       .finally(() => {
         if (live) setDashReady(true);
@@ -268,6 +345,44 @@ export function CommandDeck() {
       live = false;
     };
   }, [openDeck]);
+
+  useEffect(() => {
+    const onShow = () => {
+      void recoverWalletReturn();
+    };
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void refresh(false);
+    };
+    window.addEventListener("pageshow", onShow);
+    document.addEventListener("visibilitychange", onVisible);
+    void recoverWalletReturn();
+    return () => {
+      window.removeEventListener("pageshow", onShow);
+      document.removeEventListener("visibilitychange", onVisible);
+    };
+  }, [recoverWalletReturn, refresh]);
+
+  useEffect(() => {
+    const ids = new Set<string>();
+    const consider = (intent: AegisIntent | null | undefined, blocked: boolean) => {
+      if (blocked || !intent || !isNativeNearTransfer(intent)) return;
+      const recipient = intent.recipient.trim();
+      if (!namedAccountMustExist(recipient)) return;
+      ids.add(recipient);
+    };
+    for (const message of messages) {
+      const decision = message.attestation?.decision;
+      consider(decision?.intent, decision?.policy_status === "BLOCKED");
+    }
+    consider(quote?.intent, false);
+    for (const id of ids) {
+      if (accountChecks.current.has(id)) continue;
+      accountChecks.current.add(id);
+      void viewAccountStatus(id).then((status) => {
+        setAccountGate((current) => (current[id] === status ? current : { ...current, [id]: status }));
+      });
+    }
+  }, [messages, quote]);
 
   async function run<T>(key: string, task: () => Promise<T>): Promise<T> {
     setBusy(key);
@@ -439,7 +554,7 @@ export function CommandDeck() {
     } catch (error) {
       const code = aiLimitCode(error);
       const timeout = error instanceof DeckRequestError && error.code === "request_timeout";
-      const message = timeout ? "" : aiLimitText(lang, error) || (error instanceof Error ? error.message : translate(lang, "loadFail"));
+      const message = timeout ? "" : aiLimitText(lang, error) || noticeForApiError(lang, error);
       setMessages((current) => [
         ...current,
         {
@@ -516,10 +631,10 @@ export function CommandDeck() {
         publishPreview(intentId, intent, dry.preview);
       } catch (error) {
         if (error instanceof DeckRequestError && error.preview) publishPreview(intentId, intent, error.preview);
-        setNotice(error instanceof Error ? error.message : translate(lang, "loadFail"));
+        setNotice(noticeForApiError(lang, error));
       }
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : translate(lang, "loadFail"));
+      setNotice(noticeForApiError(lang, error));
       throw error;
     }
   }
@@ -531,7 +646,7 @@ export function CommandDeck() {
       setNotice(translate(lang, "adminOn"));
       await refresh();
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : translate(lang, "loadFail"));
+      setNotice(noticeForApiError(lang, error));
     }
   }
 
@@ -541,7 +656,7 @@ export function CommandDeck() {
       setNotice(translate(lang, "adminOff"));
       await refresh();
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : translate(lang, "loadFail"));
+      setNotice(noticeForApiError(lang, error));
     }
   }
 
@@ -553,7 +668,7 @@ export function CommandDeck() {
       setNotice(remoteLine(translate(lang, "rotated"), result.remoteError));
       await refresh();
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : translate(lang, "loadFail"));
+      setNotice(noticeForApiError(lang, error));
     }
   }
 
@@ -565,7 +680,7 @@ export function CommandDeck() {
       setNotice(remoteLine(translate(lang, "revokedNotice"), result.remoteError));
       await refresh();
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : translate(lang, "loadFail"));
+      setNotice(noticeForApiError(lang, error));
     }
   }
 
@@ -583,7 +698,7 @@ export function CommandDeck() {
       setNotice(remoteLine(translate(lang, result.frozen ? "frozenNotice" : "unfrozenNotice"), result.remoteError));
       await refresh();
     } catch (error) {
-      setNotice(error instanceof Error ? error.message : translate(lang, "loadFail"));
+      setNotice(noticeForApiError(lang, error));
     }
   }
 
@@ -596,7 +711,7 @@ export function CommandDeck() {
       publishPreview(intentId, intent, result.preview);
     } catch (error) {
       if (error instanceof DeckRequestError && error.preview) publishPreview(intentId, intent, error.preview);
-      setNotice(error instanceof Error ? error.message : translate(lang, "loadFail"));
+      setNotice(noticeForApiError(lang, error));
     }
   }
 
@@ -646,7 +761,7 @@ export function CommandDeck() {
         });
         setMessages((current) => current.map((item) => (item.id === intentId ? { ...item, dryRun: error.preview, dryRunShown: true } : item)));
       }
-      setNotice(error instanceof Error ? error.message : translate(lang, "loadFail"));
+      setNotice(noticeForApiError(lang, error));
     }
   }
 
@@ -676,6 +791,7 @@ export function CommandDeck() {
     executeFlight.current = true;
     if (cardId) setExecuteCardId(cardId);
     setBusy("execute");
+    let wrotePending = false;
     const failKey = (key: CopyKey, faucet = false) => {
       if (cardId) showCard(cardId, { tone: "fail", failKey: key, faucet });
     };
@@ -727,7 +843,7 @@ export function CommandDeck() {
           preview = error.preview;
           publishPreview(cardId, armed.intent, error.preview);
         } else {
-          failText(error instanceof Error ? error.message : translate(lang, "executeFailed"));
+          failText(noticeForApiError(lang, error, "executeFailed"));
           return;
         }
       }
@@ -781,6 +897,13 @@ export function CommandDeck() {
       };
       const contractId = publicContractId();
       const batch = buildNativeTransferBatch(recipient, yocto, contractId, execution);
+      rememberPendingSend({
+        correlationId: execution.correlation_id,
+        cardId,
+        amount: armed.intent.amount,
+        recipient,
+      });
+      wrotePending = true;
       let transferHash = "";
       let proofHash = "";
       let usedBatch = false;
@@ -790,6 +913,7 @@ export function CommandDeck() {
           usedBatch = true;
           const list = Array.isArray(outcomes) ? outcomes : [outcomes];
           if (executionFailed(list[0])) {
+            clearPendingSend();
             failKey("executeFailed");
             return;
           }
@@ -818,6 +942,7 @@ export function CommandDeck() {
         }
       }
       if (!transferHash && !proofHash) {
+        clearPendingSend();
         failKey("walletNoHash");
         return;
       }
@@ -847,11 +972,14 @@ export function CommandDeck() {
       setExecutedIds(stored.executedIds);
       setLedgerEntries(stored.entries);
       setQuote(null);
+      clearPendingSend();
       if (transferHash || proofHash) {
         setLatestChain({ id: execution.correlation_id, hash: transferHash || proofHash, receiptHash: "" });
       }
-      await refresh();
+      if (transferHash) void postSaveTx(execution.correlation_id, transferHash, null, proofHash).catch(() => undefined);
+      await refreshUntil(execution.correlation_id);
     } catch (error) {
+      if (wrotePending) clearPendingSend();
       const kind = classifyWalletError(error);
       if (kind === "rejected") failKey("executeRejected");
       else if (kind === "insufficient") failKey("lowBalance", true);
@@ -864,7 +992,14 @@ export function CommandDeck() {
     }
   }
 
-  function resolveArmed(intentId?: string): { id: string; intent: AegisIntent; attestation: AttestedInference; dryRun: DryRunPreview | null } | null {
+  function guardAccountStatus(intent: AegisIntent | null, gate: Record<string, AccountViewStatus>): AccountViewStatus | "checking" | null {
+  if (!intent || !isNativeNearTransfer(intent)) return null;
+  const recipient = intent.recipient.trim();
+  if (!namedAccountMustExist(recipient)) return null;
+  return gate[recipient] ?? "checking";
+}
+
+function resolveArmed(intentId?: string): { id: string; intent: AegisIntent; attestation: AttestedInference; dryRun: DryRunPreview | null } | null {
     if (intentId) {
       const message = messages.find((item) => item.id === intentId);
       const intent = message?.attestation?.decision.intent;
@@ -947,7 +1082,7 @@ export function CommandDeck() {
               onClick={() => {
                 setLoadError(null);
                 void openDeck().catch((error: unknown) => {
-                  setLoadError(error instanceof Error ? error.message : translate(lang, "loadFail"));
+                  setLoadError(noticeForApiError(lang, error));
                 });
               }}
             >
@@ -955,7 +1090,7 @@ export function CommandDeck() {
             </ShimmerActionButton>
           </div>
         ) : null}
-        <div role="tablist" aria-label={lang === "bn" ? translate(lang, "brandMark") : translate(lang, "brand")} className="mb-6 flex gap-2 overflow-x-auto pb-2">
+        <div role="tablist" aria-label={lang === "bn" ? translate(lang, "brandMark") : translate(lang, "brand")} className="mb-6 flex gap-1 pb-1">
           {tabs.map((item) => {
             const selected = tab === item.id;
             return (
@@ -964,8 +1099,11 @@ export function CommandDeck() {
                 type="button"
                 role="tab"
                 aria-selected={selected}
-                onClick={() => setTab(item.id)}
-                className={`shrink-0 rounded-full px-4 py-2 text-sm whitespace-nowrap ${selected ? "bg-[#00EC97] text-[#04140d]" : "bg-white/5 text-white/75"}`}
+                onClick={() => {
+                  setTab(item.id);
+                  if (item.id === "proofs") void refresh(false);
+                }}
+                className={`min-w-0 flex-1 break-words rounded-full px-1.5 py-2 text-center text-xs leading-tight sm:px-3 sm:text-sm ${selected ? "bg-[#00EC97] text-[#04140d]" : "bg-white/5 text-white/75"}`}
               >
                 {translate(lang, item.key)}
               </button>
@@ -992,6 +1130,7 @@ export function CommandDeck() {
             executeCardId={executeCardId}
             executedIds={executedIds}
             inputsReady={ledgerReady}
+            accountGate={accountGate}
             walletConnected={Boolean(accountId)}
             nearBalance={accountId ? nearBalance : null}
             onAutoRedact={setAutoRedact}
@@ -1025,6 +1164,7 @@ export function CommandDeck() {
             cardOutcome={quote ? cardOutcomes[quote.intentId] ?? null : null}
             executed={Boolean(quote && executedIds.includes(quote.intentId))}
             inputsReady={ledgerReady}
+            accountStatus={guardAccountStatus(quote?.intent ?? null, accountGate)}
             onDryRun={() => void refreshQuote()}
             onExecute={() => void execute()}
             onFreeze={() => void freeze()}

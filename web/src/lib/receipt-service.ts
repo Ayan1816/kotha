@@ -11,6 +11,7 @@ import {
   type ReceiptBody,
 } from "./receipt-canonical";
 import { getReceipt, listReceiptRecords, putReceipt, setReceiptStatus, type ReceiptRecord } from "./receipt-store";
+import { readTxLinks } from "./tx-link-store";
 
 type IntentView = {
   action: string;
@@ -97,11 +98,15 @@ export async function receiptBytesForDownload(id: string): Promise<string | null
 
 export async function overlayReceiptRows(rows: VaultExecution[]): Promise<VerifiedExecution[]> {
   const records = await listReceiptRecords();
+  const links = readTxLinks();
   return rows.map((row) => {
     const record = records[row.correlation_id];
+    const link = links[row.correlation_id];
+    const txHash = link?.transferHash || record?.tx_hash || undefined;
+    const proofHash = link?.proofHash || undefined;
     const parsed = record ? parseFrozenReceipt(record.bytes) : null;
     if (!parsed) {
-      return { ...row, tx_hash: record?.tx_hash || undefined, receipt_hash: undefined };
+      return { ...row, tx_hash: txHash, proof_tx_hash: proofHash, receipt_hash: undefined };
     }
     return {
       ...row,
@@ -111,7 +116,8 @@ export async function overlayReceiptRows(rows: VaultExecution[]): Promise<Verifi
       timestamp_ns: parsed.receipt.timestamp_ns,
       request_sha256: parsed.receipt.request_sha256,
       response_sha256: parsed.receipt.response_sha256,
-      tx_hash: record?.tx_hash || undefined,
+      tx_hash: txHash,
+      proof_tx_hash: proofHash,
       receipt_hash: parsed.receipt_hash,
     };
   });

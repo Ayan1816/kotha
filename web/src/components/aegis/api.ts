@@ -266,8 +266,13 @@ export async function postExecute(
   return postIntent<ExecuteResponse>("execute", { intent, teeAttestation }, wallet);
 }
 
-export async function postSaveTx(id: string, txHash: string, wallet?: WalletProofWire | null): Promise<{ type: "save_tx"; id: string; tx_hash: string }> {
-  return postIntent("save_tx", { id, tx_hash: txHash }, wallet);
+export async function postSaveTx(
+  id: string,
+  txHash: string,
+  wallet?: WalletProofWire | null,
+  proofHash?: string,
+): Promise<{ type: "save_tx"; id: string; tx_hash: string }> {
+  return postIntent("save_tx", { id, tx_hash: txHash, proof_tx_hash: proofHash || "" }, wallet);
 }
 
 export async function postAdminUnlock(code: string): Promise<{ type: "admin_unlock"; admin: true }> {

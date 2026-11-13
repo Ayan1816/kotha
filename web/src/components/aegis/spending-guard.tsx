@@ -4,6 +4,7 @@ import { DryRunSummary, QuoteBody, dryRunIsBlocked, dryRunLabel, dryRunTone, for
 import { translate, type Lang } from "@/components/aegis/copy";
 import { ExecuteBanner } from "@/components/aegis/execute-banner";
 import { actionCopyKey, isNativeNearTransfer, previewSymbol } from "@/components/aegis/format";
+import type { AccountViewStatus } from "@/lib/account-view";
 import type { AegisIntent, ActivePolicy, DryRunPreview } from "@/lib/dashboard-types";
 import type { CardOutcome } from "@/lib/native-transfer";
 import { nativeExecuteBlock } from "@/lib/native-transfer";
@@ -29,6 +30,7 @@ export function SpendingGuard({
   cardOutcome = null,
   executed = false,
   inputsReady = true,
+  accountStatus = null,
   onDryRun,
   onExecute,
   onFreeze,
@@ -52,29 +54,34 @@ export function SpendingGuard({
   cardOutcome?: CardOutcome | null;
   executed?: boolean;
   inputsReady?: boolean;
+  accountStatus?: AccountViewStatus | "checking" | null;
   onDryRun: () => void;
   onExecute: () => void;
   onFreeze: () => void;
 }) {
   const limit = policy.dailyBudgetUsd > 0 ? policy.dailyBudgetUsd : 1;
   const used = Math.max(0, Math.min(100, (policy.spentTodayUsd / limit) * 100));
-  const dryTitle = intent ? undefined : translate(lang, "noIntentReason");
+  const accountCopy = accountStatus === "missing" ? translate(lang, "executeAccountMissing") : accountStatus === "unknown" ? translate(lang, "executeCheckFailed") : null;
+  const accountHold = accountStatus === "missing" || accountStatus === "unknown" || accountStatus === "checking";
+  const dryTitle = !intent ? translate(lang, "noIntentReason") : accountCopy || undefined;
   const policyBlocked = dryRunIsBlocked(dryRun);
   const nativeBlock = intent ? nativeExecuteBlock(intent) : null;
   const nativeReason = nativeBlock ? translate(lang, nativeBlock) : null;
-  const canExecute = ownerReady && inputsReady && !nativeBlock && !policyBlocked && !executeReason && !executeHint && Boolean(intent) && !executed && !executeBusy;
+  const canExecute = ownerReady && inputsReady && !nativeBlock && !policyBlocked && !executeReason && !executeHint && Boolean(intent) && !executed && !executeBusy && !accountHold;
   const executeLabel = executed ? translate(lang, "executeDone") : executeBusy ? translate(lang, "executeProcessing") : translate(lang, "executeButton");
   const executeTip = executed || executeBusy || !inputsReady
     ? undefined
-    : canExecute
-    ? undefined
-    : executeHint
-      ? executeHint
-      : nativeReason
-        ? nativeReason
-        : !ownerReady
-          ? translate(lang, "connectOwner")
-          : executeReason || translate(lang, "blockedByPolicy");
+    : accountHold
+      ? accountCopy || undefined
+      : canExecute
+      ? undefined
+      : executeHint
+        ? executeHint
+        : nativeReason
+          ? nativeReason
+          : !ownerReady
+            ? translate(lang, "connectOwner")
+            : executeReason || translate(lang, "blockedByPolicy");
   const freezeTitle = ownerLock || undefined;
   const blockedLine = dryRun?.warnings[0] ? formatWarning(lang, dryRun.warnings[0]) : translate(lang, "blockedByPolicy");
 
@@ -112,7 +119,7 @@ export function SpendingGuard({
           <p className="text-sm text-[#ffb3c0]">{blockedLine}</p>
         ) : (
           <>
-            <GuardButton label={translate(lang, "dryRun")} title={dryTitle} busy={quoteBusy} disabled={Boolean(dryTitle)} onClick={onDryRun} tone="ghost" />
+            <GuardButton label={translate(lang, "dryRun")} title={dryTitle} busy={quoteBusy} disabled={Boolean(dryTitle) || accountHold} onClick={onDryRun} tone="ghost" />
             <GuardButton label={executeLabel} title={executeTip} busy={executeBusy || executed} keepLabel disabled={!canExecute} onClick={onExecute} tone="primary" />
           </>
         )}

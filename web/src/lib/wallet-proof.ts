@@ -239,13 +239,24 @@ export function isPlausibleTxHash(value: string): boolean {
 }
 
 export function txHashFromOutcome(outcome: unknown): string | null {
+  if (typeof outcome === "string") return isPlausibleTxHash(outcome) ? outcome : null;
+  if (Array.isArray(outcome)) {
+    for (const item of outcome) {
+      const hash = txHashFromOutcome(item);
+      if (hash) return hash;
+    }
+    return null;
+  }
   if (!outcome || typeof outcome !== "object") return null;
   const row = outcome as {
+    hash?: unknown;
+    transactionHash?: unknown;
+    txHash?: unknown;
     transaction?: { hash?: unknown };
     transaction_hash?: unknown;
     transaction_outcome?: { id?: unknown };
   };
-  const candidates = [row.transaction?.hash, row.transaction_hash, row.transaction_outcome?.id];
+  const candidates = [row.hash, row.transactionHash, row.txHash, row.transaction_hash, row.transaction?.hash, row.transaction_outcome?.id];
   for (const value of candidates) {
     if (typeof value === "string" && isPlausibleTxHash(value)) return value;
   }

@@ -17,7 +17,9 @@ import { anchorExecutionReceipt, overlayReceiptRows, saveReceiptTxHash } from "@
 import type { AegisIntent } from "@/lib/dashboard-types";
 import { adminCookieInit, adminSessionValid, allowAdminAttempt, checkAdminCode, ownerProofRequired, signAdminSession } from "@/lib/admin-session";
 import { connectedWalletAccount } from "@/lib/ai-rate-limit";
+import { fillExecutionTxHashes } from "@/lib/chain-tx-lookup";
 import { nearBalanceBook, viewAccountYocto } from "@/lib/near-balance";
+import { writeTxLink } from "@/lib/tx-link-store";
 import { configuredOwnerId, DEFAULT_CONTRACT_ID, DEMO_OWNER_ID, isPlausibleTxHash, publicNetwork, strictOwnerMode, walletProofAttached } from "@/lib/wallet-proof";
 import { requireOwnerProof, WalletAuthError } from "@/lib/wallet-verify";
 
@@ -35,12 +37,19 @@ export async function GET(request: Request) {
       getVaultInfo(),
       listExecutions(),
     ]);
+    const overlaid = await overlayReceiptRows(executions);
+    let withHashes = overlaid;
+    try {
+      withHashes = await fillExecutionTxHashes(overlaid);
+    } catch {
+      // Nearblocks is a cache. A failed lookup leaves the link cell blank.
+    }
     return NextResponse.json({
       network: labelNetwork(catalog.network),
       tokens: catalog.tokens,
       agentState,
       vaultInfo,
-      executions: await overlayReceiptRows(executions),
+      executions: withHashes,
       admin: adminSessionValid(request.headers.get("cookie")),
     });
   } catch (error) {
@@ -137,6 +146,8 @@ export async function POST(request: Request) {
       if (!id || id.length > 200 || !isPlausibleTxHash(txHash)) {
         return NextResponse.json({ error: { code: "invalid_tx", message: "Receipt id and transaction hash are required." } }, { status: 400 });
       }
+      const proofHash = typeof payload.proof_tx_hash === "string" ? payload.proof_tx_hash.trim() : "";
+      writeTxLink(id, txHash, proofHash);
       const saved = await saveReceiptTxHash(id, txHash);
       if (!saved) {
         return NextResponse.json({ error: { code: "receipt_not_found", message: "No frozen receipt is stored for that id." } }, { status: 404 });

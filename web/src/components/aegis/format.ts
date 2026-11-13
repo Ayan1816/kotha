@@ -46,7 +46,7 @@ export function showSlippageRow(intent: Pick<AegisIntent, "action">): boolean {
   return intent.action === "swap";
 }
 
-/** The wNEAR settlement note is for intent swaps, not a native NEAR transfer. */
+/** Swap previews mention a testnet wNEAR settlement. Native NEAR transfers do not. */
 export function showWnearLine(intent: Pick<AegisIntent, "action" | "origin_asset" | "destination_asset" | "recipient">): boolean {
   if (intent.action === "transfer" || intent.action === "withdraw") return false;
   return assetLabel(intent.origin_asset).symbol === "wNEAR";

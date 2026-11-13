@@ -1,12 +1,11 @@
 import fs from "fs";
 import { aegisStatePath, readTextFile, writeJsonFile } from "./aegis-paths";
 import { isSampleExecution } from "./budget-math";
+import { DEFAULT_RPC_URL, VIEW_TIMEOUT_MS, rpcCandidates } from "./near-rpc";
+
+export { DEFAULT_RPC_URL, FASTNEAR_TESTNET_RPC, PUBLIC_TESTNET_RPC, VIEW_TIMEOUT_MS, rpcCandidates } from "./near-rpc";
 
 export const DEFAULT_CONTRACT_ID = "kotha-vault-1793945609.testnet";
-export const FASTNEAR_TESTNET_RPC = "https://test.rpc.fastnear.com";
-export const PUBLIC_TESTNET_RPC = "https://rpc.testnet.near.org";
-export const DEFAULT_RPC_URL = FASTNEAR_TESTNET_RPC;
-export const VIEW_TIMEOUT_MS = 8_000;
 export const RPC_FAIL_CACHE_MS = 5_000;
 const LOG_FILE = "aegis-vault-executions.json";
 const ACTION_TYPES = ["swap", "transfer", "withdraw", "shield", "unshield"] as const;
@@ -63,15 +62,6 @@ export function contractId(): string {
 
 export function rpcUrl(): string {
   return rpcCandidates()[0] || DEFAULT_RPC_URL;
-}
-
-/** Primary testnet RPC, then the other public endpoint. An explicit URL is used alone. */
-export function rpcCandidates(explicit?: string): string[] {
-  const pinned = explicit?.trim();
-  if (pinned) return [pinned];
-  const primary = (process.env.NEAR_RPC_URL || DEFAULT_RPC_URL).trim() || DEFAULT_RPC_URL;
-  const extras = [FASTNEAR_TESTNET_RPC, PUBLIC_TESTNET_RPC].filter((url) => url !== primary);
-  return [primary, ...extras];
 }
 
 export async function getVaultInfo(): Promise<VaultInfo> {
