@@ -1,5 +1,6 @@
 import { translate, type CopyKey, type Lang } from "@/components/aegis/copy";
 import type { AegisIntent, IntentAction, NetworkComponentStatus, VerifiedExecution } from "@/lib/dashboard-types";
+import { isNearAccountId } from "@/lib/near-account";
 
 const DATE_LOCALE: Record<Lang, string> = {
   en: "en-US",
@@ -31,15 +32,13 @@ export function previewSymbol(assetId: string, action?: string): string {
   return symbol;
 }
 
-const NEAR_ACCOUNT = /^[a-z0-9](?:[a-z0-9_\-.]{0,61}[a-z0-9])?\.(?:near|testnet|tg)$/i;
-
 export function isNativeNearTransfer(intent: Pick<AegisIntent, "action" | "origin_asset" | "destination_asset" | "recipient">): boolean {
   if (intent.action !== "transfer") return false;
   const origin = assetLabel(intent.origin_asset).symbol;
   const destination = assetLabel(intent.destination_asset).symbol;
   if (origin !== "wNEAR" && origin !== "NEAR") return false;
   if (destination !== "wNEAR" && destination !== "NEAR") return false;
-  return NEAR_ACCOUNT.test(intent.recipient.trim());
+  return isNearAccountId(intent.recipient);
 }
 
 /** Slippage is a swap quote. Plain transfers do not show the row. */

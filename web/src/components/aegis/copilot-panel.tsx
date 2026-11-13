@@ -3,8 +3,11 @@
 import { DryRunSummary } from "@/components/aegis/audit-panel";
 import { CopyButton, HashRow } from "@/components/aegis/bits";
 import { fillCopy, translate, type CopyKey, type Lang } from "@/components/aegis/copy";
+import { ExecuteBanner } from "@/components/aegis/execute-banner";
 import { actionCopyKey, actionTone, attestationCurl, isNativeNearTransfer, previewSymbol, showSlippageRow, showWnearLine, signatureCurl } from "@/components/aegis/format";
 import { displayReply, LOADER_STEPS, readActionCard, visibleMessageText, type LoaderStep } from "@/lib/chat-stream";
+import type { CardOutcome } from "@/lib/native-transfer";
+import { nativeExecuteBlock } from "@/lib/native-transfer";
 import { isLocalPreview } from "@/lib/tee-status";
 import { recordedBlobToWav, voiceExceedsLimit } from "@/lib/wav";
 import { cn } from "@/lib/utils";
@@ -66,6 +69,7 @@ export function CopilotPanel({
   onAutoRedact,
   onSend,
   onRetry,
+  cardOutcomes = {},
   onRetryTranslate,
   onDryRun,
   onOpenGuard,
@@ -89,6 +93,7 @@ export function CopilotPanel({
   onAutoRedact: (next: boolean) => void;
   onSend: (text: string, chipKey?: string) => void;
   onRetry?: (id: string) => void;
+  cardOutcomes?: Record<string, CardOutcome>;
   onRetryTranslate?: (id: string) => void;
   onDryRun?: (intentId: string) => void;
   onOpenGuard?: (intentId: string) => void;
@@ -434,6 +439,7 @@ export function CopilotPanel({
                 baseUrl={baseUrl}
                 ownerReady={ownerReady}
                 executeHint={executeHint}
+                outcome={cardOutcomes[message.id] ?? null}
                 onDryRun={onDryRun}
                 onOpenGuard={onOpenGuard}
                 onExecute={onExecute}
@@ -547,6 +553,7 @@ function AssistantBubble({
   baseUrl,
   ownerReady,
   executeHint,
+  outcome,
   onDryRun,
   onOpenGuard,
   onExecute,
@@ -557,6 +564,7 @@ function AssistantBubble({
   baseUrl: string;
   ownerReady: boolean;
   executeHint?: string | null;
+  outcome?: CardOutcome | null;
   onDryRun?: (intentId: string) => void;
   onOpenGuard?: (intentId: string) => void;
   onExecute?: (intentId: string) => void;
@@ -585,7 +593,7 @@ function AssistantBubble({
   const serverVerified = !localPreview && attestation.verification.status === "verified";
   const badgeLabel = translate(lang, localPreview ? "localPreview" : serverVerified ? "verifiedBadge" : "unverifiedBadge");
   return (
-    <article className="mr-6 min-w-0 max-w-full rounded-2xl border border-white/10 bg-black/25 px-3 py-3">
+    <article id={`card-${message.id}`} className="mr-6 min-w-0 max-w-full rounded-2xl border border-white/10 bg-black/25 px-3 py-3">
       <div className="mb-2 text-[10px] uppercase tracking-[0.16em] text-[#00EC97]">KOTHA</div>
       <div className="mb-2 flex flex-wrap items-center gap-2">
         <span
@@ -643,6 +651,7 @@ function AssistantBubble({
         onOpenGuard={onOpenGuard}
         onExecute={onExecute}
       />
+      <ExecuteBanner lang={lang} outcome={outcome ?? null} />
       <details className="mt-3 rounded-xl border border-[#00EC97]/20 bg-[#00EC97]/5 px-3 py-2">
         <summary className="cursor-pointer text-sm font-medium text-[#b8ffe0]">{translate(lang, "showDetails")}</summary>
         <div className="mt-2">
@@ -717,14 +726,20 @@ function ActionCard({
   if (status === "BLOCKED") {
     return <p className="mt-3 text-sm text-[#ffb3c0]">{translate(lang, "blockedByPolicy")}</p>;
   }
-  const enabled = ownerReady && status === "PASS";
+  const native = Boolean(intent && isNativeNearTransfer(intent));
+  const blockText = intent && !native ? translate(lang, nativeExecuteBlock(intent) || "executeNativeOnly") : null;
+  const enabled = ownerReady && native && !executeHint;
   const tip = enabled
     ? undefined
     : executeHint
       ? executeHint
-      : !ownerReady
-        ? translate(lang, "connectOwner")
-        : translate(lang, "blockedByPolicy");
+      : blockText
+        ? blockText
+        : status === "INSUFFICIENT_BALANCE"
+          ? translate(lang, "lowBalance")
+          : !ownerReady
+            ? translate(lang, "connectOwner")
+            : translate(lang, "blockedByPolicy");
   return (
     <div className="mt-3 rounded-2xl border border-white/10 bg-black/30 p-3">
       {intent ? <IntentFacts lang={lang} intent={intent} dryRun={dryRun} /> : null}
@@ -740,12 +755,7 @@ function ActionCard({
         <button type="button" onClick={() => onDryRun?.(messageId)} className="h-9 rounded-xl border border-white/15 px-3 text-sm text-white">
           {translate(lang, "dryRun")}
         </button>
-        <span title={tip} className="inline-flex">
-          {tip ? (
-            <span id={reasonId} className="sr-only">
-              {tip}
-            </span>
-          ) : null}
+        <span className="inline-flex">
           <button
             type="button"
             disabled={!enabled}
@@ -759,6 +769,7 @@ function ActionCard({
           </button>
         </span>
       </div>
+      {tip ? <p id={reasonId} className="mt-2 text-sm text-[#ffd7a1]">{tip}</p> : null}
     </div>
   );
 }

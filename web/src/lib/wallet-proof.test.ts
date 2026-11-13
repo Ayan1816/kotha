@@ -146,14 +146,16 @@ describe("wallet proof helpers", () => {
     assert.equal(call.method, "record_execution");
     assert.equal(call.gas, RECORD_GAS);
     assert.equal(call.deposit, RECORD_DEPOSIT);
-    assert.equal(call.gas, "30000000000000");
+    assert.equal(call.gas, "100000000000000");
     assert.equal(call.deposit, "0");
     assert.equal(Object.hasOwn(call.args, "receipt_hash"), false);
     assert.equal(call.args.execution.response_sha256, HASH);
     assert.equal(call.args.execution.request_sha256, receipt.intent_hash);
-    assert.equal(call.args.execution.usd_amount_cents, "1500");
-    assert.equal(call.args.execution.timestamp_ns, "1700000000000000000");
-    assert.equal(typeof call.args.execution.timestamp_ns, "string");
+    assert.equal(call.args.execution.usd_amount_cents, 1500);
+    assert.equal(typeof call.args.execution.usd_amount_cents, "number");
+    assert.equal(typeof call.args.execution.timestamp_ns, "number");
+    assert.match(JSON.stringify(call.args.execution.timestamp_ns), /^\d+$/);
+    assert.match(JSON.stringify(call.args.execution.usd_amount_cents), /^\d+$/);
     const view = executionViewCall(call.contractId, receipt.correlation_id);
     assert.equal(view.method, "get_execution");
     assert.deepEqual(view.args, { correlation_id: "kotha-1" });
@@ -171,6 +173,7 @@ describe("wallet proof helpers", () => {
 
   it("reads a transaction hash from the wallet outcome and ignores a missing one", () => {
     assert.equal(txHashFromOutcome({ transaction: { hash: "4tgG9r1t3o8v8vYQq6oS7m1oYw2mQh3oP" } }), "4tgG9r1t3o8v8vYQq6oS7m1oYw2mQh3oP");
+    assert.equal(txHashFromOutcome({ transaction_outcome: { id: "4tgG9r1t3o8v8vYQq6oS7m1oYw2mQh3oP" } }), "4tgG9r1t3o8v8vYQq6oS7m1oYw2mQh3oP");
     assert.equal(txHashFromOutcome({}), null);
     assert.equal(txHashFromOutcome({ transaction: { hash: "not a hash" } }), null);
   });

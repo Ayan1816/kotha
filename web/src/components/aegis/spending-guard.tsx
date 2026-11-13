@@ -1,9 +1,12 @@
 "use client";
 
-import { DryRunSummary, QuoteBody, dryRunIsBlocked, dryRunIsPass, dryRunLabel, dryRunTone, formatWarning } from "@/components/aegis/audit-panel";
+import { DryRunSummary, QuoteBody, dryRunIsBlocked, dryRunLabel, dryRunTone, formatWarning } from "@/components/aegis/audit-panel";
 import { translate, type Lang } from "@/components/aegis/copy";
+import { ExecuteBanner } from "@/components/aegis/execute-banner";
 import { actionCopyKey, isNativeNearTransfer, previewSymbol } from "@/components/aegis/format";
 import type { AegisIntent, ActivePolicy, DryRunPreview } from "@/lib/dashboard-types";
+import type { CardOutcome } from "@/lib/native-transfer";
+import { nativeExecuteBlock } from "@/lib/native-transfer";
 import { useId } from "react";
 
 export function SpendingGuard({
@@ -23,6 +26,7 @@ export function SpendingGuard({
   remittanceLine,
   quoteError,
   executeReason,
+  cardOutcome = null,
   onDryRun,
   onExecute,
   onFreeze,
@@ -43,6 +47,7 @@ export function SpendingGuard({
   remittanceLine: string | null;
   quoteError: string | null;
   executeReason: string | null;
+  cardOutcome?: CardOutcome | null;
   onDryRun: () => void;
   onExecute: () => void;
   onFreeze: () => void;
@@ -51,19 +56,23 @@ export function SpendingGuard({
   const used = Math.max(0, Math.min(100, (policy.spentTodayUsd / limit) * 100));
   const dryTitle = intent ? undefined : translate(lang, "noIntentReason");
   const policyBlocked = dryRunIsBlocked(dryRun);
-  const canExecute = ownerReady && dryRunIsPass(dryRun) && !executeReason;
+  const nativeBlock = intent ? nativeExecuteBlock(intent) : null;
+  const nativeReason = nativeBlock ? translate(lang, nativeBlock) : null;
+  const canExecute = ownerReady && !nativeBlock && !policyBlocked && !executeReason && !executeHint && Boolean(intent);
   const executeTip = canExecute
     ? undefined
     : executeHint
       ? executeHint
-      : !ownerReady
-        ? translate(lang, "connectOwner")
-        : translate(lang, "blockedByPolicy");
+      : nativeReason
+        ? nativeReason
+        : !ownerReady
+          ? translate(lang, "connectOwner")
+          : executeReason || translate(lang, "blockedByPolicy");
   const freezeTitle = ownerLock || undefined;
   const blockedLine = dryRun?.warnings[0] ? formatWarning(lang, dryRun.warnings[0]) : translate(lang, "blockedByPolicy");
 
   return (
-    <section className="rounded-2xl border border-white/10 bg-[#07110d] p-6 shadow-[0_16px_40px_rgba(0,0,0,0.35)]">
+    <section id="guard-card" className="rounded-2xl border border-white/10 bg-[#07110d] p-6 shadow-[0_16px_40px_rgba(0,0,0,0.35)]">
       <h2 className="text-xl font-semibold text-white">{translate(lang, "tabGuard")}</h2>
       {vaultOwner || vaultAgent ? (
         <p className="mt-2 break-words text-sm text-white/70">
@@ -107,6 +116,8 @@ export function SpendingGuard({
           tone="danger"
         />
       </div>
+      {executeTip && !policyBlocked ? <p className="mt-3 text-sm text-[#ffd7a1]">{executeTip}</p> : null}
+      <ExecuteBanner lang={lang} outcome={cardOutcome} />
       <details className="mt-6 rounded-2xl border border-white/10 p-4">
         <summary className="cursor-pointer text-sm text-[#b8ffe0]">{translate(lang, "showDetails")}</summary>
         <div className="mt-4">

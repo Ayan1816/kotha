@@ -125,7 +125,7 @@ const en = {
   revokedNotice: "Session grant revoked. Executions stay blocked until you rotate a new grant.",
   frozenNotice: "Emergency freeze is active. The enclave is in lockdown.",
   unfrozenNotice: "Emergency freeze released.",
-  executedNotice: "Execution recorded. Balances, budget, and the audit stream updated.",
+  executedNotice: "NEAR was sent and the execution was recorded. Balances, budget, and the audit stream updated.",
   remoteNote: "Remote owner intent",
   status: "Status",
   agent: "Agent",
@@ -355,6 +355,16 @@ const en = {
   agentFrozen: ". The agent is frozen.",
   agentOpen: ".",
   injectionReason: "AI firewall rejected the prompt injection. PROHORI_PER_TX_LIMIT_EXCEEDED PROHORI_DAILY_BUDGET_EXCEEDED. {details}",
+  executeNativeOnly: "Execute sends native NEAR only. Swaps are not broadcast from this button.",
+  executePhoneRecipient: "This recipient is a phone number, not a NEAR account.",
+  executeInvalidRecipient: "This recipient is not a NEAR account.",
+  executeAccountMissing: "That NEAR account does not exist. A transfer to a missing named account would fail.",
+  executeRejected: "The wallet request was cancelled.",
+  executeSent: "Sent {amount} NEAR to {recipient}.",
+  executeProofMissing: "NEAR was sent, but the on-chain proof was not recorded.",
+  executeFailed: "The transfer did not complete.",
+  executeCheckFailed: "Could not check the recipient account. Try again.",
+  executeProofLink: "On-chain proof",
 } as const;
 
 export type CopyKey = keyof typeof en;
@@ -481,7 +491,7 @@ const bn: { [K in CopyKey]: string } = {
   revokedNotice: "সেশন গ্রান্ট বাতিল। নতুন গ্রান্ট না ঘোরালে এক্সিকিউশন বন্ধ থাকবে।",
   frozenNotice: "জরুরি ফ্রিজ সক্রিয়। এনক্লেভ লকডাউনে।",
   unfrozenNotice: "জরুরি ফ্রিজ তোলা হয়েছে।",
-  executedNotice: "এক্সিকিউশন লিপিবদ্ধ। ব্যালেন্স, বাজেট, ও অডিট স্ট্রিম আপডেট।",
+  executedNotice: "NEAR পাঠানো হয়েছে এবং এক্সিকিউশন লিপিবদ্ধ। ব্যালেন্স, বাজেট, ও অডিট স্ট্রিম আপডেট।",
   remoteNote: "রিমোট মালিক ইন্টেন্ট",
   status: "অবস্থা",
   agent: "এজেন্ট",
@@ -711,6 +721,16 @@ const bn: { [K in CopyKey]: string } = {
   agentFrozen: "। এজেন্ট স্থগিত আছে।",
   agentOpen: "।",
   injectionReason: "এআই ফায়ারওয়াল প্রম্পট ইনজেকশন বাতিল করেছে (prompt injection)। PROHORI_PER_TX_LIMIT_EXCEEDED PROHORI_DAILY_BUDGET_EXCEEDED। {details}",
+  executeNativeOnly: "এক্সিকিউট শুধু নেটিভ NEAR পাঠায়। এই বোতাম থেকে সোয়াপ পাঠানো হয় না।",
+  executePhoneRecipient: "এই প্রাপক একটি ফোন নম্বর, NEAR অ্যাকাউন্ট নয়।",
+  executeInvalidRecipient: "এই প্রাপক একটি NEAR অ্যাকাউন্ট নয়।",
+  executeAccountMissing: "এই NEAR অ্যাকাউন্ট এখনও নেই। নামযুক্ত অ্যাকাউন্ট না থাকলে ট্রান্সফার ব্যর্থ হয়।",
+  executeRejected: "ওয়ালেট অনুরোধ বাতিল হয়েছে।",
+  executeSent: "{amount} NEAR {recipient}-এ পাঠানো হয়েছে।",
+  executeProofMissing: "NEAR পাঠানো হয়েছে, কিন্তু অন-চেইন প্রমাণ লিপিবদ্ধ হয়নি।",
+  executeFailed: "ট্রান্সফার সম্পন্ন হয়নি।",
+  executeCheckFailed: "প্রাপক অ্যাকাউন্ট যাচাই করা যায়নি। আবার চেষ্টা করুন।",
+  executeProofLink: "অন-চেইন প্রমাণ",
 };
 
 export function translate(lang: Lang, key: CopyKey): string {

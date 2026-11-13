@@ -2,10 +2,10 @@
 
 import { useKothaSession } from "@/app/providers";
 import { ApiKeyCard } from "@/components/aegis/api-key-card";
-import { DeckRequestError, fetchDashboard, fetchTeeCatalog, postAdminLock, postAdminUnlock, postDryRun, postExecute, postFreeze, postGrant, postLocalPreview, postPolicy, postSaveTx, postTeeChatStream, postTranslateMany } from "@/components/aegis/api";
-import { ProofsTable, type ChainLink } from "@/components/aegis/audit-panel";
+import { DeckRequestError, fetchDashboard, fetchTeeCatalog, postAdminLock, postAdminUnlock, postDryRun, postFreeze, postGrant, postLocalPreview, postPolicy, postTeeChatStream, postTranslateMany } from "@/components/aegis/api";
+import { ProofsTable, dryRunIsBlocked, formatWarning, type ChainLink } from "@/components/aegis/audit-panel";
 import { CopilotPanel, isChipKey, usesFixedPreviewCopy, type ChatMessage } from "@/components/aegis/copilot-panel";
-import { translate, type Lang } from "@/components/aegis/copy";
+import { fillCopy, translate, type Lang } from "@/components/aegis/copy";
 import { PhoneBook } from "@/components/aegis/phone-book";
 import { PolicyPanel } from "@/components/aegis/policy-panel";
 import { SpendingGuard } from "@/components/aegis/spending-guard";
@@ -15,7 +15,27 @@ import { invalidAmountReason } from "@/lib/budget-math";
 import { acceptedTranslation, displayReply, withoutStaleSwapRefusals, type LoaderStep } from "@/lib/chat-stream";
 import { selectArmedQuote } from "@/lib/guard-quote";
 import { isLocalChatPreview } from "@/lib/local-command";
-import { isLocalPreview, overallTeePhase } from "@/lib/tee-status";
+import {
+  DAILY_CAP_CENTS,
+  NATIVE_GAS_BUFFER_YOCTO,
+  PER_TX_CAP_CENTS,
+  accountMissingError,
+  asYocto,
+  buildNativeTransferBatch,
+  classifyWalletError,
+  executionFailed,
+  hashesFromOutcomes,
+  localTransferProof,
+  namedAccountMustExist,
+  nativeExecuteBlock,
+  nearToYoctoString,
+  notionalCents,
+  senderCovers,
+  unsupportedBatchError,
+  type CardOutcome,
+  type WalletExecution,
+} from "@/lib/native-transfer";
+import { overallTeePhase } from "@/lib/tee-status";
 import { resolveRemittance } from "@/lib/phone-resolver";
 import {
   chainMatches,
@@ -29,7 +49,6 @@ import {
   publicContractId,
   strictOwnerMode,
   txHashFromOutcome,
-  walletRecordCall,
 } from "@/lib/wallet-proof";
 import { yoctoToNear } from "near-api-js";
 import { useNearWallet } from "near-connect-hooks";
@@ -42,7 +61,6 @@ import type {
   EnclaveTelemetry,
   ExecutionResult,
   PolicyPatch,
-  PublicGrant,
 } from "@/lib/dashboard-types";
 import { useCallback, useEffect, useRef, useState } from "react";
 
@@ -77,6 +95,7 @@ export function CommandDeck() {
   const [chatStep, setChatStep] = useState<LoaderStep | null>(null);
   const [liveText, setLiveText] = useState("");
   const [latestChain, setLatestChain] = useState<ChainLink | null>(null);
+  const [cardOutcomes, setCardOutcomes] = useState<Record<string, CardOutcome>>({});
   const [remittanceLine, setRemittanceLine] = useState<string | null>(null);
   const [lastPrompt, setLastPrompt] = useState("");
   const [adminCode, setAdminCode] = useState("");
@@ -434,6 +453,13 @@ export function CommandDeck() {
     return account === configuredOwnerId();
   }
 
+  function walletMaySendNative(account: string): boolean {
+    if (!account) return false;
+    if (chainKnown) return account === chainOwner || account === chainAgent;
+    if (!ownerConfigured) return true;
+    return account === configuredOwnerId();
+  }
+
   async function ownerProof(action: string, payload: Record<string, unknown>) {
     if (admin) return null;
     const account = (near.signedAccountId || "").trim();
@@ -605,93 +631,192 @@ export function CommandDeck() {
     setTab("guard");
   }
 
+  function showCard(cardId: string, outcome: CardOutcome) {
+    setCardOutcomes((current) => ({ ...current, [cardId]: outcome }));
+    window.setTimeout(() => {
+      const node = document.getElementById(`card-${cardId}`) || document.getElementById("guard-card");
+      node?.scrollIntoView({ behavior: "smooth", block: "center" });
+    }, 50);
+  }
+
   async function execute(intentId?: string) {
-    const armed = intentId ? quoteFromCard(intentId) : quote;
-    if (!armed) return;
-    if (intentId) setQuote(armed);
+    const armed = resolveArmed(intentId);
+    if (!armed) {
+      const cardId = intentId || quote?.intentId || "";
+      if (cardId) showCard(cardId, { tone: "fail", text: translate(lang, "executeFailed") });
+      return;
+    }
+    const cardId = armed.id;
+    if (armed.dryRun) {
+      setQuote({
+        intentId: cardId,
+        intent: armed.intent,
+        dryRun: armed.dryRun,
+        attestation: armed.attestation,
+        execution: quote?.intentId === cardId ? quote.execution : null,
+      });
+    }
+    const fail = (text: string, faucet = false) => showCard(cardId, { tone: "fail", text, faucet });
+    setBusy("execute");
     try {
       const account = (near.signedAccountId || "").trim();
-      if (!admin && !accountMayExecute(account)) {
-        setNotice(account ? translate(lang, "walletUnauthorized") : translate(lang, "connectOwner"));
+      if (!walletMaySendNative(account)) {
+        fail(account ? translate(lang, "walletUnauthorized") : translate(lang, "connectOwner"));
         return;
       }
-      if (!admin && !account && (ownerConfigured || chainKnown)) {
-        setNotice(translate(lang, "connectOwner"));
+      const block = nativeExecuteBlock(armed.intent);
+      if (block) {
+        fail(translate(lang, block));
         return;
       }
-      if (armed.attestation.verification.status !== "verified") {
-        setNotice(isLocalPreview(armed.attestation.verification) ? translate(lang, "localPreview") : armed.attestation.verification.reason || translate(lang, "unverifiedBadge"));
+      if (frozen) {
+        fail(translate(lang, "lockdown"));
         return;
       }
-      const teeAttestation = {
-        chatId: armed.attestation.chatId,
-        requestSha256: armed.attestation.requestSha256,
-        responseSha256: armed.attestation.responseSha256,
-        signature: armed.attestation.signature,
-        signing_address: armed.attestation.signing_address,
-        verificationStatus: armed.attestation.verification.status,
-      };
-      const payload = { intent: armed.intent, teeAttestation };
-      const wallet = await ownerProof("execute", payload);
-      const result = await run("execute", () => postExecute(armed.intent, teeAttestation, wallet));
-      setQuote((current) =>
-        current && current.intentId === armed.intentId ? { ...current, execution: result.execution, dryRun: result.execution.preview } : current,
-      );
-      if (result.simulated || result.execution.remote_status === "simulated-demo") {
-        setNotice(translate(lang, "demoSimulated"));
-        await refresh();
+      let yocto = "";
+      try {
+        yocto = nearToYoctoString(armed.intent.amount);
+      } catch {
+        fail(translate(lang, "invalidAmount"));
         return;
       }
-      if (admin || !account) {
-        setNotice(result.vault.chain_error || translate(lang, "serverSigned"));
-        if (result.vault.tx_hash || result.vault.receipt_hash) {
-          setLatestChain({
-            id: result.execution.correlation_id,
-            hash: result.vault.tx_hash || "",
-            receiptHash: result.vault.receipt_hash || "",
-          });
+      let preview = armed.dryRun;
+      try {
+        const dry = await postDryRun(armed.intent, account);
+        preview = dry.preview;
+        publishPreview(cardId, armed.intent, dry.preview);
+      } catch (error) {
+        if (error instanceof DeckRequestError && error.preview) {
+          preview = error.preview;
+          publishPreview(cardId, armed.intent, error.preview);
+        } else {
+          fail(error instanceof Error ? error.message : translate(lang, "executeFailed"));
+          return;
         }
-        await refresh();
+      }
+      if (!preview || dryRunIsBlocked(preview) || preview.policyAllowed === false) {
+        fail(policyText(lang, preview?.warnings));
         return;
       }
-      setNotice(translate(lang, "executedNotice"));
-      let txHash = result.vault.tx_hash || "";
-      let receiptHash = result.vault.receipt_hash || "";
-      if (!txHash) {
+      if (preview.balance === "insufficient") {
+        fail(translate(lang, "lowBalance"), true);
+        return;
+      }
+      const cents = notionalCents(preview.budgetImpact?.txUsd, armed.intent.amount_usd_estimate);
+      const spentCents = Math.round((dashboard?.agentState.policy.spentTodayUsd ?? 0) * 100);
+      if (cents > PER_TX_CAP_CENTS || spentCents + cents > DAILY_CAP_CENTS) {
+        fail(policyText(lang, preview.warnings));
+        return;
+      }
+      const recipient = armed.intent.recipient.trim();
+      if (namedAccountMustExist(recipient)) {
         try {
-          const recorded = await submitOwnerRecord(result.execution.correlation_id);
-          txHash = recorded.txHash;
-          receiptHash = recorded.receiptHash || receiptHash;
-          const savePayload = { id: result.execution.correlation_id, tx_hash: txHash };
-          const saveProof = await ownerProof("save_tx", savePayload);
-          await postSaveTx(savePayload.id, txHash, saveProof);
-        } catch (chainError) {
-          setNotice(chainError instanceof Error ? chainError.message : translate(lang, "loadFail"));
+          await near.getBalance(recipient);
+        } catch (error) {
+          fail(accountMissingError(error) ? translate(lang, "executeAccountMissing") : translate(lang, "executeCheckFailed"));
+          return;
         }
       }
-      if (txHash || receiptHash) setLatestChain({ id: result.execution.correlation_id, hash: txHash, receiptHash });
-      await refresh();
-      window.setTimeout(() => {
-        document.getElementById(`exec-${result.execution.correlation_id}`)?.scrollIntoView({ behavior: "smooth", block: "nearest" });
-      }, 50);
-    } catch (error) {
-      if (error instanceof DeckRequestError && error.preview) {
-        setQuote((current) => (current && current.intentId === armed.intentId ? { ...current, dryRun: error.preview as DryRunPreview } : current));
+      const senderBalance = asYocto(await near.getBalance(account));
+      if (senderBalance == null) {
+        fail(translate(lang, "executeCheckFailed"));
+        return;
       }
-      setNotice(error instanceof Error ? error.message : translate(lang, "loadFail"));
+      if (!senderCovers(senderBalance, yocto, NATIVE_GAS_BUFFER_YOCTO)) {
+        fail(translate(lang, "lowBalance"), true);
+        return;
+      }
+      const proof = await localTransferProof(armed.attestation);
+      const execution: WalletExecution = {
+        correlation_id: `nt-${crypto.randomUUID()}`,
+        agent_id: account,
+        action_type: "transfer",
+        origin_asset: armed.intent.origin_asset,
+        destination_asset: armed.intent.destination_asset,
+        amount_atomic: yocto,
+        usd_amount_cents: cents,
+        near_ai_chat_id: proof.near_ai_chat_id,
+        tee_signing_address: proof.tee_signing_address,
+        request_sha256: proof.request_sha256,
+        response_sha256: proof.response_sha256,
+        tee_signature: proof.tee_signature,
+        timestamp_ns: Number(BigInt(Date.now()) * 1_000_000n),
+      };
+      const contractId = publicContractId();
+      const batch = buildNativeTransferBatch(recipient, yocto, contractId, execution);
+      let transferHash = "";
+      let proofHash = "";
+      let usedBatch = false;
+      if (typeof near.signAndSendTransactions === "function") {
+        try {
+          const outcomes = await near.signAndSendTransactions(batch);
+          usedBatch = true;
+          const list = Array.isArray(outcomes) ? outcomes : [outcomes];
+          if (executionFailed(list[0])) {
+            fail(translate(lang, "executeFailed"));
+            return;
+          }
+          const hashes = hashesFromOutcomes(list);
+          transferHash = hashes.transferHash;
+          proofHash = executionFailed(list[1]) ? "" : hashes.proofHash;
+        } catch (error) {
+          if (!unsupportedBatchError(error)) throw error;
+        }
+      }
+      if (!usedBatch) {
+        const transferred = await near.transfer({ receiverId: recipient, amount: yocto });
+        transferHash = txHashFromOutcome(transferred) || "";
+        if (!transferHash) throw new Error(translate(lang, "walletNoHash"));
+        try {
+          const recorded = await near.callFunctionRaw({
+            contractId,
+            method: "record_execution",
+            args: { execution },
+            gas: batch.transactions[1].actions[0].params.gas,
+            deposit: "0",
+          });
+          proofHash = txHashFromOutcome(recorded) || "";
+        } catch {
+          proofHash = "";
+        }
+      }
+      if (!transferHash && !proofHash) {
+        fail(translate(lang, "walletNoHash"));
+        return;
+      }
+      const sent = fillCopy(lang, "executeSent", { amount: armed.intent.amount, recipient });
+      const proofMissing = !proofHash;
+      showCard(cardId, {
+        tone: proofMissing ? "warn" : "ok",
+        text: proofMissing ? `${sent} ${translate(lang, "executeProofMissing")}` : `${sent} ${translate(lang, "executedNotice")}`,
+        transferHash: transferHash || undefined,
+        proofHash: proofHash && proofHash !== transferHash ? proofHash : undefined,
+      });
+      if (proofHash || transferHash) {
+        setLatestChain({ id: execution.correlation_id, hash: proofHash || transferHash, receiptHash: proofHash });
+      }
+      await refresh();
+    } catch (error) {
+      const kind = classifyWalletError(error);
+      if (kind === "rejected") fail(translate(lang, "executeRejected"));
+      else if (kind === "insufficient") fail(translate(lang, "lowBalance"), true);
+      else if (kind === "unauthorized") fail(translate(lang, "walletUnauthorized"));
+      else fail(translate(lang, "executeFailed"));
+    } finally {
+      setBusy((current) => (current === "execute" ? null : current));
     }
   }
 
-  async function submitOwnerRecord(id: string): Promise<{ txHash: string; receiptHash: string }> {
-    const response = await fetch(`/api/receipts/${encodeURIComponent(id)}`, { cache: "no-store" });
-    if (!response.ok) throw new Error(translate(lang, "receiptNotStored"));
-    const parsed = parseFrozenReceiptJson(await response.text());
-    if (!parsed) throw new Error(translate(lang, "receiptUnreadable"));
-    const call = walletRecordCall(publicContractId(), parsed.receipt, parsed.receipt_hash);
-    const outcome = await near.callFunctionRaw(call);
-    const txHash = txHashFromOutcome(outcome);
-    if (!txHash) throw new Error(translate(lang, "walletNoHash"));
-    return { txHash, receiptHash: parsed.receipt_hash };
+  function resolveArmed(intentId?: string): { id: string; intent: AegisIntent; attestation: AttestedInference; dryRun: DryRunPreview | null } | null {
+    if (intentId) {
+      const message = messages.find((item) => item.id === intentId);
+      const intent = message?.attestation?.decision.intent;
+      if (message?.attestation && intent) {
+        return { id: message.id, intent, attestation: message.attestation, dryRun: message.dryRun ?? null };
+      }
+    }
+    if (!quote) return null;
+    return { id: quote.intentId, intent: quote.intent, attestation: quote.attestation, dryRun: quote.dryRun };
   }
 
   async function verifyOnChain(correlationId: string, receiptHash?: string): Promise<"match" | "mismatch"> {
@@ -704,9 +829,8 @@ export function CommandDeck() {
     return chainMatches(viewed, hash) ? "match" : "mismatch";
   }
 
-  const grant = dashboard?.agentState.grant;
-  const reason = ownerLock || quoteError || blockReason(lang, frozen, grant, quote);
-  const executeReady = admin || (Boolean(accountId) && accountMayExecute(accountId));
+  const executeReason = quoteError || (frozen ? translate(lang, "lockdown") : null) || (quote?.dryRun.balance === "insufficient" ? translate(lang, "lowBalance") : null);
+  const executeReady = walletMaySendNative(accountId);
   const executeHint = !executeReady && accountId ? translate(lang, "walletUnauthorized") : null;
 
   const tabs: Array<{ id: TabId; key: "tabChat" | "tabGuard" | "tabProofs" | "tabSettings" }> = [
@@ -791,6 +915,7 @@ export function CommandDeck() {
             accountId={accountId}
             ownerReady={executeReady}
             executeHint={executeHint}
+            cardOutcomes={cardOutcomes}
             walletConnected={Boolean(accountId)}
             nearBalance={accountId ? nearBalance : null}
             onAutoRedact={setAutoRedact}
@@ -819,7 +944,8 @@ export function CommandDeck() {
             dryRun={quote?.dryRun ?? null}
             remittanceLine={remittanceLine}
             quoteError={quoteError}
-            executeReason={reason}
+            executeReason={executeReason}
+            cardOutcome={quote ? cardOutcomes[quote.intentId] ?? null : null}
             onDryRun={() => void refreshQuote()}
             onExecute={() => void execute()}
             onFreeze={() => void freeze()}
@@ -1032,20 +1158,10 @@ function remoteLine(base: string, remoteError: string | null): string {
   return `${base} ${remoteError}`;
 }
 
-function blockReason(lang: Lang, frozen: boolean, grant: PublicGrant | undefined, quote: ArmedQuote | null): string | null {
-  if (frozen) return translate(lang, "frozenReason");
-  if (!grant || grant.revoked || !grant.active || Date.parse(grant.expiresAt) <= Date.now()) return translate(lang, "grantReason");
-  if (!quote) return translate(lang, "noIntentReason");
-  const dry = quote.dryRun;
-  if (dry.balance === "skipped" && dry.policyAllowed !== false) return translate(lang, "needsWallet");
-  if (dry.balance === "insufficient" && dry.policyAllowed !== false) return translate(lang, "lowBalance");
-  if (!dry.allowed) return humanWarning(lang, dry.warnings[0]) || translate(lang, "blockedReason");
-  return null;
-}
-
-function humanWarning(lang: Lang, warning: string | undefined): string {
-  if (!warning) return "";
-  if (warning === "INSUFFICIENT_BALANCE") return translate(lang, "insufficientBadge");
-  if (warning === "BALANCE_SKIPPED") return translate(lang, "balanceSkipped");
-  return warning;
+function policyText(lang: Lang, warnings: string[] | undefined): string {
+  const warning = warnings?.find((item) => item !== "INSUFFICIENT_BALANCE" && item !== "BALANCE_SKIPPED") || warnings?.[0] || "";
+  if (!warning) return translate(lang, "blockedByPolicy");
+  const filled = formatWarning(lang, warning);
+  if (/^PROHORI_[A-Z0-9_]+$/.test(filled.trim())) return translate(lang, "blockedByPolicy");
+  return filled;
 }

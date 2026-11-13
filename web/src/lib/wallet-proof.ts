@@ -2,7 +2,8 @@ export const PROOF_RECIPIENT = "kotha";
 export const DEMO_OWNER_ID = "demo-owner.testnet";
 export const PROOF_MAX_AGE_MS = 5 * 60 * 1000;
 export const PROOF_FUTURE_SKEW_MS = 60 * 1000;
-export const RECORD_GAS = "30000000000000";
+/** 100 TGas. The wallet JSON-encodes this string on the FunctionCall. */
+export const RECORD_GAS = "100000000000000";
 export const RECORD_DEPOSIT = "0";
 export const DEFAULT_CONTRACT_ID = "kotha-vault-1793945609.testnet";
 
@@ -239,9 +240,16 @@ export function isPlausibleTxHash(value: string): boolean {
 
 export function txHashFromOutcome(outcome: unknown): string | null {
   if (!outcome || typeof outcome !== "object") return null;
-  const row = outcome as { transaction?: { hash?: unknown }; transaction_hash?: unknown };
-  const hash = typeof row.transaction?.hash === "string" ? row.transaction.hash : typeof row.transaction_hash === "string" ? row.transaction_hash : "";
-  return isPlausibleTxHash(hash) ? hash : null;
+  const row = outcome as {
+    transaction?: { hash?: unknown };
+    transaction_hash?: unknown;
+    transaction_outcome?: { id?: unknown };
+  };
+  const candidates = [row.transaction?.hash, row.transaction_hash, row.transaction_outcome?.id];
+  for (const value of candidates) {
+    if (typeof value === "string" && isPlausibleTxHash(value)) return value;
+  }
+  return null;
 }
 
 export function chainMatches(result: unknown, receiptHash: string): boolean {
@@ -259,18 +267,33 @@ export function executionViewCall(contractId: string, correlationId: string): {
   return { contractId, method: "get_execution", args: { correlation_id: correlationId } };
 }
 
+export type WalletExecutionArgs = {
+  correlation_id: string;
+  agent_id: string;
+  action_type: string;
+  origin_asset: string;
+  destination_asset: string;
+  amount_atomic: string;
+  usd_amount_cents: number;
+  near_ai_chat_id: string;
+  tee_signing_address: string;
+  request_sha256: string;
+  response_sha256: string;
+  tee_signature: string;
+  timestamp_ns: number;
+};
+
 export function walletRecordCall(contractId: string, receipt: FrozenChainReceipt, receiptHash: string): {
   contractId: string;
   method: "record_execution";
-  args: { execution: Record<string, string> };
+  args: { execution: WalletExecutionArgs };
   gas: string;
   deposit: string;
 } {
-  // The deployed method is record_execution(execution: VerifiedExecution).
-  // receipt_hash is stored as response_sha256. usd_amount_cents and timestamp_ns
-  // stay digit strings so a value above 2^53 is not rounded in JavaScript.
-  // Wallet JSON encoding quotes those strings. The server signer path still
-  // writes unquoted digits when it is the broadcaster.
+  // record_execution takes VerifiedExecution. usd_amount_cents and timestamp_ns
+  // are u64, so the wallet must serialize them as JSON numbers. Cents fit in
+  // 2^53. A timestamp may lose sub-microsecond precision, which the vault accepts.
+  // Deposit stays "0" because the method is not payable.
   return {
     contractId,
     method: "record_execution",
@@ -284,13 +307,13 @@ export function walletRecordCall(contractId: string, receipt: FrozenChainReceipt
         origin_asset: receipt.origin_asset,
         destination_asset: receipt.destination_asset,
         amount_atomic: receipt.amount_atomic,
-        usd_amount_cents: receipt.usd_amount_cents,
+        usd_amount_cents: Number(receipt.usd_amount_cents),
         near_ai_chat_id: receipt.chat_id,
         tee_signing_address: receipt.signing_address,
         request_sha256: receipt.intent_hash,
         response_sha256: receiptHash,
         tee_signature: receipt.signature,
-        timestamp_ns: receipt.timestamp_ns,
+        timestamp_ns: Number(receipt.timestamp_ns),
       },
     },
   };
