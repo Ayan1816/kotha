@@ -1,4 +1,5 @@
 import { verifyMessage } from "near-api-js/nep413";
+import { VIEW_TIMEOUT_MS, rpcCandidates } from "./near-vault-rpc";
 import {
   DEMO_OWNER_ID,
   PROOF_RECIPIENT,
@@ -29,7 +30,7 @@ const defaultFetch: RpcFetch = async (url, init) => {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: init.body,
-    signal: AbortSignal.timeout(20_000),
+    signal: AbortSignal.timeout(VIEW_TIMEOUT_MS),
   });
   return { ok: response.ok, json: () => response.json() };
 };
@@ -42,6 +43,7 @@ export async function requireOwnerProof(input: {
   ownerId?: string;
   rpcUrl?: string;
   fetchImpl?: RpcFetch;
+  allowedAccounts?: string[];
 }): Promise<void> {
   const proof = readProof(input.proof);
   if (!proof) throw new WalletAuthError("proof_invalid", "Wallet proof is missing.");
@@ -58,16 +60,24 @@ export async function requireOwnerProof(input: {
     return;
   }
   const owner = (input.ownerId ?? configuredOwnerId()).trim();
+  const allowed = new Set((input.allowedAccounts ?? []).map((id) => id.trim()).filter((id) => id.length > 0));
   const sessionOwner = proofClaimsSessionOwner(proof.message);
-  if (!(sessionOwner && proof.accountId) && (!owner || proof.accountId !== owner)) {
+  if (!(sessionOwner && proof.accountId) && !allowed.has(proof.accountId) && (!owner || proof.accountId !== owner)) {
     throw new WalletAuthError("owner_required", "Connect the owner wallet.");
   }
-  const rpcUrl = input.rpcUrl || rpcForAccount(proof.accountId);
-  let keys: AccessKeyRow[];
-  try {
-    keys = await loadAccessKeys(proof.accountId, rpcUrl, input.fetchImpl ?? defaultFetch);
-  } catch (error) {
-    if (error instanceof WalletAuthError) throw error;
+  const urls = input.rpcUrl?.trim() ? [input.rpcUrl.trim()] : rpcUrlsForAccount(proof.accountId);
+  let keys: AccessKeyRow[] | null = null;
+  let lastError: unknown;
+  for (const rpcUrl of urls) {
+    try {
+      keys = await loadAccessKeys(proof.accountId, rpcUrl, input.fetchImpl ?? defaultFetch);
+      break;
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  if (!keys) {
+    if (lastError instanceof WalletAuthError) throw lastError;
     throw new WalletAuthError("proof_invalid", "Could not read the account access keys.");
   }
   const listed = findAccessKey(keys, proof.publicKey);
@@ -75,9 +85,9 @@ export async function requireOwnerProof(input: {
   await verifySignedProof(proof, nonce, signature, listed.access_key?.permission);
 }
 
-function rpcForAccount(accountId: string): string {
-  if (accountId.endsWith(".near")) return "https://rpc.mainnet.near.org";
-  return process.env.NEAR_RPC_URL || "https://rpc.testnet.near.org";
+function rpcUrlsForAccount(accountId: string): string[] {
+  if (accountId.endsWith(".near")) return ["https://rpc.mainnet.near.org"];
+  return rpcCandidates();
 }
 
 async function verifySignedProof(proof: WalletProofWire, nonce: Uint8Array, signature: Uint8Array, permission: unknown): Promise<void> {

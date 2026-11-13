@@ -12,6 +12,9 @@ export function SpendingGuard({
   frozen,
   ownerLock,
   ownerReady,
+  executeHint = null,
+  vaultOwner = "",
+  vaultAgent = "",
   quoteBusy,
   executeBusy,
   freezeBusy,
@@ -29,6 +32,9 @@ export function SpendingGuard({
   frozen: boolean;
   ownerLock: string | null;
   ownerReady: boolean;
+  executeHint?: string | null;
+  vaultOwner?: string;
+  vaultAgent?: string;
   quoteBusy: boolean;
   executeBusy: boolean;
   freezeBusy: boolean;
@@ -46,13 +52,26 @@ export function SpendingGuard({
   const dryTitle = intent ? undefined : translate(lang, "noIntentReason");
   const policyBlocked = dryRunIsBlocked(dryRun);
   const canExecute = ownerReady && dryRunIsPass(dryRun) && !executeReason;
-  const executeTip = canExecute ? undefined : !ownerReady ? translate(lang, "connectOwner") : translate(lang, "blockedByPolicy");
+  const executeTip = canExecute
+    ? undefined
+    : executeHint
+      ? executeHint
+      : !ownerReady
+        ? translate(lang, "connectOwner")
+        : translate(lang, "blockedByPolicy");
   const freezeTitle = ownerLock || undefined;
   const blockedLine = dryRun?.warnings[0] ? formatWarning(lang, dryRun.warnings[0]) : translate(lang, "blockedByPolicy");
 
   return (
     <section className="rounded-2xl border border-white/10 bg-[#07110d] p-6 shadow-[0_16px_40px_rgba(0,0,0,0.35)]">
       <h2 className="text-xl font-semibold text-white">{translate(lang, "tabGuard")}</h2>
+      {vaultOwner || vaultAgent ? (
+        <p className="mt-2 break-words text-sm text-white/70">
+          {vaultOwner ? `${translate(lang, "vaultOwner")}: ${vaultOwner}` : ""}
+          {vaultOwner && vaultAgent ? " · " : ""}
+          {vaultAgent ? `${translate(lang, "vaultAgent")}: ${vaultAgent}` : ""}
+        </p>
+      ) : null}
       <div className="mt-6 grid gap-4 sm:grid-cols-3">
         <Stat label={translate(lang, "dailyLimit")} value={usd(policy.dailyBudgetUsd)} />
         <Stat label={translate(lang, "perTxLimit")} value={usd(policy.perTxCapUsd)} />

@@ -1,0 +1,61 @@
+name: Set vault agent
+
+on:
+  workflow_dispatch:
+    inputs:
+      agent:
+        description: Account allowed to record executions
+        required: true
+        default: mohin12.testnet
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  set-agent:
+    name: update_agent_account
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install near-cli-rs
+        run: |
+          set -euo pipefail
+          curl --proto '=https' --tlsv1.2 -LsSf https://github.com/near/near-cli-rs/releases/latest/download/near-cli-rs-installer.sh | sh
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          near --version
+
+      - name: Call update_agent_account and print get_vault_info
+        env:
+          NEAR_CONTRACT_ID: ${{ secrets.NEAR_CONTRACT_ID }}
+          NEAR_PRIVATE_KEY: ${{ secrets.NEAR_PRIVATE_KEY }}
+          AGENT: ${{ inputs.agent }}
+        run: |
+          set -euo pipefail
+          export PATH="$HOME/.cargo/bin:$HOME/.local/bin:$PATH"
+          if [ -z "${NEAR_PRIVATE_KEY:-}" ] || [ -z "${NEAR_CONTRACT_ID:-}" ]; then
+            echo "NEAR_PRIVATE_KEY or NEAR_CONTRACT_ID is unset."
+            exit 1
+          fi
+          if [ -z "${AGENT:-}" ]; then
+            echo "agent input is empty."
+            exit 1
+          fi
+          ARGS=$(printf '{"agent_account":"%s"}' "$AGENT")
+          near contract call-function as-transaction "$NEAR_CONTRACT_ID" update_agent_account \
+            json-args "$ARGS" \
+            prepaid-gas '100 TeraGas' \
+            attached-deposit '0 NEAR' \
+            sign-as "$NEAR_CONTRACT_ID" \
+            network-config testnet \
+            sign-with-plaintext-private-key "$NEAR_PRIVATE_KEY" \
+            send
+          echo "get_vault_info"
+          near contract call-function as-read-only "$NEAR_CONTRACT_ID" get_vault_info \
+            json-args '{}' \
+            network-config testnet \
+            now

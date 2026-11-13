@@ -1,7 +1,7 @@
 "use client";
 
 import { CopyButton, HashRow } from "@/components/aegis/bits";
-import { translate, type CopyKey, type Lang } from "@/components/aegis/copy";
+import { fillCopy, translate, type CopyKey, type Lang } from "@/components/aegis/copy";
 import { actionCopyKey, actionTone, amountSummary, displayRoute, formatTimestamp, getExecutionCommand, isNativeNearTransfer, previewSymbol, shortHash, showSlippageRow, showWnearLine, testnetLabel } from "@/components/aegis/format";
 import { judgeReceipt, readChainExecution, rehashReceipt } from "@/lib/receipt-canonical";
 import { explorerTxUrl, publicNetwork } from "@/lib/wallet-proof";
@@ -153,8 +153,17 @@ export function dryRunIsBlocked(dryRun: DryRunPreview | null): boolean {
 export function formatWarning(lang: Lang, warning: string): string {
   if (warning === "INSUFFICIENT_BALANCE") return translate(lang, "insufficientBadge");
   if (warning === "BALANCE_SKIPPED") return translate(lang, "balanceSkipped");
-  if (warning.startsWith("PROHORI_PER_TX_LIMIT_EXCEEDED")) return `${warning} — ${translate(lang, "prohoriPerTx")}`;
-  if (warning.startsWith("PROHORI_DAILY_BUDGET_EXCEEDED")) return `${warning} — ${translate(lang, "prohoriDaily")}`;
+  const nums = [...warning.matchAll(/\$(\d+(?:\.\d+)?)/g)].map((match) => match[1]);
+  if (warning.startsWith("PROHORI_PER_TX_LIMIT_EXCEEDED") && nums.length >= 2) {
+    return fillCopy(lang, "prohoriPerTx", { tx: nums[0], cap: nums[1] });
+  }
+  if (warning.startsWith("PROHORI_DAILY_BUDGET_EXCEEDED") && nums.length >= 4) {
+    return fillCopy(lang, "prohoriDaily", { spent: nums[0], tx: nums[1], projected: nums[2], daily: nums[3] });
+  }
+  if (warning.startsWith("PROHORI_PER_TX_LIMIT_EXCEEDED")) return fillCopy(lang, "prohoriPerTx", { tx: "", cap: "" });
+  if (warning.startsWith("PROHORI_DAILY_BUDGET_EXCEEDED")) {
+    return fillCopy(lang, "prohoriDaily", { spent: "", tx: "", projected: "", daily: "" });
+  }
   return warning;
 }
 

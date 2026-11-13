@@ -60,6 +60,7 @@ export function CopilotPanel({
   teePhase = "idle",
   accountId = "",
   ownerReady = false,
+  executeHint = null,
   walletConnected = false,
   nearBalance = null,
   onAutoRedact,
@@ -82,6 +83,7 @@ export function CopilotPanel({
   teePhase?: "idle" | "local" | "unverified" | "verified";
   accountId?: string;
   ownerReady?: boolean;
+  executeHint?: string | null;
   walletConnected?: boolean;
   nearBalance?: string | null;
   onAutoRedact: (next: boolean) => void;
@@ -113,9 +115,7 @@ export function CopilotPanel({
   const recordStarted = useRef(0);
   const [uploading, setUploading] = useState(false);
   const demoTimer = useRef<number | null>(null);
-  const thinkingRef = useRef(thinking);
   const onSendRef = useRef(onSend);
-  thinkingRef.current = thinking;
   onSendRef.current = onSend;
 
   useEffect(() => {
@@ -137,7 +137,7 @@ export function CopilotPanel({
 
   function submit(text: string, chipKey?: string) {
     const message = text.trim();
-    if (!message || thinkingRef.current) return;
+    if (!message) return;
     setInput("");
     onSendRef.current(message, chipKey);
   }
@@ -433,6 +433,7 @@ export function CopilotPanel({
                 message={message}
                 baseUrl={baseUrl}
                 ownerReady={ownerReady}
+                executeHint={executeHint}
                 onDryRun={onDryRun}
                 onOpenGuard={onOpenGuard}
                 onExecute={onExecute}
@@ -444,7 +445,7 @@ export function CopilotPanel({
             <div className="mr-6 min-w-0 rounded-2xl border border-[#00EC97]/25 bg-black/25 px-3 py-3">
               <StepLoader lang={lang} step={chatStep} />
               <p className="mt-2 min-h-5 whitespace-pre-wrap break-words text-sm leading-relaxed text-white/90">
-                {displayReply(liveText)}
+                {displayReply(liveText) || translate(lang, "typing")}
                 <span className="ml-0.5 inline-block h-[1em] w-px animate-pulse bg-[#00EC97] align-middle" aria-hidden="true" />
               </p>
             </div>
@@ -465,7 +466,6 @@ export function CopilotPanel({
               <button
                 key={key}
                 type="button"
-                disabled={thinking}
                 onClick={() => submit(translate(lang, key), key)}
                 className="shrink-0 whitespace-nowrap rounded-full border border-white/10 bg-black/25 px-3 py-2 text-sm text-white hover:border-[#00EC97]/40 disabled:opacity-50"
               >
@@ -511,7 +511,7 @@ export function CopilotPanel({
             />
             <button
               type="submit"
-              disabled={thinking || input.trim().length === 0}
+              disabled={input.trim().length === 0}
               aria-label={translate(lang, "send")}
               className="inline-flex h-11 items-center gap-2 rounded-xl bg-[#00EC97] px-3 text-sm font-semibold text-[#04140d] disabled:opacity-40"
             >
@@ -546,6 +546,7 @@ function AssistantBubble({
   message,
   baseUrl,
   ownerReady,
+  executeHint,
   onDryRun,
   onOpenGuard,
   onExecute,
@@ -555,6 +556,7 @@ function AssistantBubble({
   message: ChatMessage;
   baseUrl: string;
   ownerReady: boolean;
+  executeHint?: string | null;
   onDryRun?: (intentId: string) => void;
   onOpenGuard?: (intentId: string) => void;
   onExecute?: (intentId: string) => void;
@@ -617,7 +619,7 @@ function AssistantBubble({
             : ""}
         </span>
       </div>
-      <p className="text-sm leading-relaxed text-white/90">{displayReply(body)}</p>
+      <p className="text-sm leading-relaxed text-white/90">{displayReply(body) || message.text}</p>
       {pendingTranslation ? <p className="mt-1 text-xs text-white/50">{translate(lang, "translating")}</p> : null}
       {retry}
       {showFaucet(message) ? (
@@ -636,6 +638,7 @@ function AssistantBubble({
         fallbackText={body}
         status={decision.policy_status}
         ownerReady={ownerReady}
+        executeHint={executeHint}
         onDryRun={onDryRun}
         onOpenGuard={onOpenGuard}
         onExecute={onExecute}
@@ -688,6 +691,7 @@ function ActionCard({
   fallbackText,
   status,
   ownerReady,
+  executeHint,
   onDryRun,
   onOpenGuard,
   onExecute,
@@ -700,6 +704,7 @@ function ActionCard({
   fallbackText: string;
   status: PolicyStatus;
   ownerReady: boolean;
+  executeHint?: string | null;
   onDryRun?: (intentId: string) => void;
   onOpenGuard?: (intentId: string) => void;
   onExecute?: (intentId: string) => void;
@@ -713,7 +718,13 @@ function ActionCard({
     return <p className="mt-3 text-sm text-[#ffb3c0]">{translate(lang, "blockedByPolicy")}</p>;
   }
   const enabled = ownerReady && status === "PASS";
-  const tip = enabled ? undefined : !ownerReady ? translate(lang, "connectOwner") : translate(lang, "blockedByPolicy");
+  const tip = enabled
+    ? undefined
+    : executeHint
+      ? executeHint
+      : !ownerReady
+        ? translate(lang, "connectOwner")
+        : translate(lang, "blockedByPolicy");
   return (
     <div className="mt-3 rounded-2xl border border-white/10 bg-black/30 p-3">
       {intent ? <IntentFacts lang={lang} intent={intent} dryRun={dryRun} /> : null}
@@ -778,23 +789,69 @@ function IntentFacts({ lang, intent, dryRun }: { lang: Lang; intent: AegisIntent
   );
 }
 
+const RISK_TIP_EVENT = "kotha-risk-tip";
+
 function RiskMark({ lang, score }: { lang: Lang; score: number }) {
   const label = translate(lang, "riskScale");
+  const id = useId();
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const onOther = (event: Event) => {
+      const detail = (event as CustomEvent<string>).detail;
+      if (detail !== id) setOpen(false);
+    };
+    const hide = () => setOpen(false);
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setOpen(false);
+    };
+    window.addEventListener(RISK_TIP_EVENT, onOther);
+    window.addEventListener("scroll", hide, true);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener(RISK_TIP_EVENT, onOther);
+      window.removeEventListener("scroll", hide, true);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [id]);
+  function show() {
+    window.dispatchEvent(new CustomEvent(RISK_TIP_EVENT, { detail: id }));
+    setOpen(true);
+  }
   return (
     <span className="inline-flex items-center gap-1">
       <Badge className={riskTone(score)}>
         {translate(lang, "risk")} {score}
       </Badge>
-      <span className="group relative inline-flex">
-        <button type="button" className="inline-flex h-4 w-4 items-center justify-center text-white/55" aria-label={label} title={label}>
+      <span className="relative inline-flex">
+        <button
+          type="button"
+          className="inline-flex h-4 w-4 items-center justify-center text-white/55"
+          aria-label={label}
+          aria-expanded={open}
+          onPointerEnter={(event) => {
+            if (event.pointerType === "mouse") show();
+          }}
+          onPointerLeave={(event) => {
+            if (event.pointerType === "mouse") setOpen(false);
+          }}
+          onClick={(event) => {
+            const pointer = event.nativeEvent instanceof PointerEvent ? event.nativeEvent.pointerType : "";
+            if (pointer === "mouse") return;
+            if (open) setOpen(false);
+            else show();
+          }}
+          onBlur={() => setOpen(false)}
+        >
           <Info className="h-3.5 w-3.5" aria-hidden="true" />
         </button>
-        <span
-          role="tooltip"
-          className="pointer-events-none absolute left-0 top-full z-20 mt-1 hidden w-56 rounded-lg border border-white/15 bg-[#0c1411] p-2 text-[11px] leading-snug text-white group-focus-within:block group-hover:block"
-        >
-          {label}
-        </span>
+        {open ? (
+          <span
+            role="tooltip"
+            className="pointer-events-none absolute left-0 top-full z-20 mt-1 w-56 rounded-lg border border-white/15 bg-[#0c1411] p-2 text-[11px] leading-snug text-white"
+          >
+            {label}
+          </span>
+        ) : null}
       </span>
     </span>
   );
@@ -863,7 +920,14 @@ function visibleText(message: ChatMessage, lang: Lang): string {
   if (message.errorCode === "load_fail") return translate(lang, "loadFail");
   if (message.errorCode === "request_timeout") return translate(lang, "requestTimeout");
   const decision = message.attestation?.decision;
-  if (decision && /prompt injection/i.test(decision.policy_reason)) return translate(lang, "injectionBlocked");
+  if (decision && /prompt injection/i.test(decision.policy_reason) && decision.intent) {
+    return fillCopy(lang, "injectionBlocked", {
+      amount: decision.intent.amount,
+      asset: previewSymbol(decision.intent.origin_asset, decision.intent.action),
+      recipient: decision.intent.recipient,
+      tx: decision.intent.amount_usd_estimate.toFixed(2),
+    });
+  }
   if (decision?.policy_reason === "INVALID_NEAR_ACCOUNT") return translate(lang, "invalidNearAccount");
   if (decision?.intent?.action === "swap") {
     return swapReply(lang, decision.intent, message.dryRun, message.statusCode || decision.policy_status);

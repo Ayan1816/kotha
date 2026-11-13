@@ -6,6 +6,7 @@ import {
   FREE_DAY_LIMIT,
   FREE_HOUR_LIMIT,
   FREE_LIMIT_MESSAGE,
+  GENERAL_QA_MAX_TOKENS,
   MAX_REPLY_TOKENS,
   WALLET_HOUR_LIMIT,
   WALLET_LIMIT_MESSAGE,
@@ -172,8 +173,11 @@ test("the redis store posts a pipeline and reads the counters", async () => {
 
 test("reply tokens are capped and the limit copy is bilingual", () => {
   assert.equal(MAX_REPLY_TOKENS, 800);
+  assert.equal(GENERAL_QA_MAX_TOKENS, 400);
+  assert.ok(FREE_DAY_LIMIT >= 30);
+  assert.ok(FREE_HOUR_LIMIT >= 30);
   const tee = readFileSync(new URL("./near-ai-tee.ts", import.meta.url), "utf8");
-  assert.match(tee, /max_tokens:\s*MAX_REPLY_TOKENS/);
+  assert.match(tee, /max_tokens:\s*isGeneralQuestion\(userMessage\) \? GENERAL_QA_MAX_TOKENS : MAX_REPLY_TOKENS/);
   assert.equal(translate("en", "freeLimit"), FREE_LIMIT_MESSAGE);
   assert.equal(translate("en", "freeLimit"), "Free limit reached. Connect your wallet to continue.");
   assert.match(translate("bn", "freeLimit"), /[\u0980-\u09FF]/);

@@ -81,7 +81,14 @@ export async function POST(request: Request) {
   });
   if (enforceOwner) {
     try {
-      await requireOwnerProof({ proof: record.wallet, action: type, payload });
+      let allowedAccounts: string[] | undefined;
+      if (type === "execute") {
+        const vault = await getVaultInfo();
+        if (vault.source === "chain") {
+          allowedAccounts = [vault.owner, vault.agentAccount].map((id) => id.trim()).filter((id) => id.length > 0);
+        }
+      }
+      await requireOwnerProof({ proof: record.wallet, action: type, payload, allowedAccounts });
     } catch (error) {
       if (error instanceof WalletAuthError) {
         return NextResponse.json({ error: { code: error.code, message: error.message } }, { status: 401 });

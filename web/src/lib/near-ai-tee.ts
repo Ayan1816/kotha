@@ -3,12 +3,14 @@ import { createHash, randomBytes } from "crypto";
 import { ed25519 } from "@noble/curves/ed25519.js";
 import { secp256k1 } from "@noble/curves/secp256k1.js";
 import { keccak_256 } from "@noble/hashes/sha3.js";
-import { MAX_REPLY_TOKENS } from "./ai-rate-limit";
+import { GENERAL_QA_MAX_TOKENS, MAX_REPLY_TOKENS } from "./ai-rate-limit";
+import { isAdversarialPrompt as isAdversarial, isLocalChatPreview } from "./local-command";
 import { extractE164, wantsConfidential } from "./near-account";
 import { redactDeterministic, redactSensitiveText } from "./pii-redact";
 import { answerAsQuestion, isGeneralQuestion, normalizeVoiceSpelling } from "./question-intent";
-import { directedRecipient, foldDigits, invalidDirectedAccount, messageTransferTarget, parseAmountToken, readTransferFields, type TransferFields } from "./transfer-parse";
+import { amountIssue, directedRecipient, foldDigits, invalidDirectedAccount, messageTransferTarget, parseAmountToken, tokenDecimals, readTransferFields, type TransferFields } from "./transfer-parse";
 export { parseTransferCommand, type ParsedTransfer } from "./transfer-parse";
+export { isDeterministicCommand, isLocalChatPreview } from "./local-command";
 import { displayReply, interpretChatBody, matchingResponseHash, parseSignedPayload, partialExplanation, type LoaderStep } from "./chat-stream";
 import { publicNetwork, TESTNET_FAUCET_URL } from "./wallet-proof";
 import {
@@ -248,6 +250,7 @@ export async function runAttestedInference(params: {
   apiKey?: string | null;
   signal?: AbortSignal;
 }): Promise<AttestedInference> {
+  params.onStep?.("thinking");
   params.onStep?.("redacting");
   const model = resolveModel(params.model);
   const apiKey = nearAiApiKey(params.apiKey);
@@ -455,7 +458,7 @@ function buildChatRequest(
   return {
     model,
     stream: true,
-    max_tokens: MAX_REPLY_TOKENS,
+    max_tokens: isGeneralQuestion(userMessage) ? GENERAL_QA_MAX_TOKENS : MAX_REPLY_TOKENS,
     response_format: { type: "json_object" },
     messages: [
       { role: "system", content: systemPrompt(locale, userMessage) },
@@ -648,10 +651,6 @@ function hasBengali(text: string): boolean {
   return /[\u0980-\u09FF]/.test(text);
 }
 
-function isAdversarial(text: string): boolean {
-  return /লিমিট\s*ভুলে|ignore\s+all\s+limits|\bdrain\b|attacker\.near/i.test(text);
-}
-
 function isScriptedKothaPrompt(text: string): boolean {
   if (isAdversarial(text)) return true;
   if (/কিনে/.test(text) && /USDT/i.test(text) && /NEAR/i.test(text)) return true;
@@ -661,32 +660,7 @@ function isScriptedKothaPrompt(text: string): boolean {
 }
 
 function shouldSkipModel(message: string): boolean {
-  if (isAdversarial(foldPrompt(message))) return true;
-  return isDeterministicCommand(message);
-}
-
-/** Transfer, swap, shield, or withdraw whose amount and parties are already in the text. */
-export function isDeterministicCommand(message: string): boolean {
-  if (isGeneralQuestion(message)) return false;
-  const folded = foldPrompt(message);
-  if (isAdversarial(folded)) return false;
-  const action = detectAction(folded);
-  if (action === "swap") {
-    const parsed = parseAmountToken(folded);
-    if (!parsed?.amount || Number(parsed.amount) <= 0) return false;
-    return findAssets(folded).length >= 2;
-  }
-  if (action === "shield") {
-    const parsed = parseAmountToken(folded);
-    return Boolean(parsed?.amount && Number(parsed.amount) > 0);
-  }
-  if (action !== "transfer" && action !== "withdraw") return false;
-  if (rejectedAccount(folded)) return true;
-  const parsed = parseAmountToken(folded);
-  if (!parsed?.amount || !parsed.token) return false;
-  if (action === "withdraw") return Boolean(detectRecipient(folded, "withdraw"));
-  const target = messageTransferTarget(folded);
-  return Boolean(target.account || target.phone);
+  return isLocalChatPreview(message);
 }
 
 function rejectedAccount(message: string): string {
@@ -763,6 +737,8 @@ function resolveDecision(
   rawIntent: unknown,
   locale: ChatLocale,
 ): CopilotDecision {
+  const invalid = invalidAmountDecision(userMessage, locale);
+  if (invalid) return invalid;
   const rejected = rejectedAccountDecision(userMessage, locale);
   if (rejected) return rejected;
   const local = decideLocally(userMessage, policyContext, balancesContext, redaction, locale);
@@ -802,6 +778,7 @@ export function guardTransferCommand(
   risk_score: number;
 } | null {
   if (isGeneralQuestion(message)) return null;
+  if (invalidAmountDecision(message, locale)) return null;
   if (rejectedAccount(message)) return null;
   const target = messageTransferTarget(message);
   const parsedAmount = parseAmountToken(message);
@@ -1024,17 +1001,25 @@ function decideLocally(
   const policy = normalizePolicyContext(policyContext);
   const balances = normalizeBalancesContext(balancesContext);
   const folded = foldPrompt(userMessage);
-  if (isAdversarial(folded)) return adversarialDecision(policy, balances, locale);
+  if (isAdversarial(folded)) return adversarialDecision(userMessage, policy, balances, locale);
+  const invalid = invalidAmountDecision(userMessage, locale);
+  if (invalid) return invalid;
   const rejected = rejectedAccountDecision(userMessage, locale);
   if (rejected) return rejected;
   if (isGeneralQuestion(userMessage)) return answerAsQuestion(null, locale, userMessage);
   const drafted = parseUserIntent(folded);
   if (!drafted) {
+    const copyLocale = locale === "bn" || hasBengali(userMessage) ? "bn" : locale;
     return {
-      explanation: `No executable intent was found. The owner policy allows $${policy.dailyBudgetUsd.toFixed(2)} per day, $${policy.spentTodayUsd.toFixed(2)} is already spent, and each transaction is capped at $${policy.perTxCapUsd.toFixed(2)}${policy.frozen ? ". The agent is frozen." : "."}`,
+      explanation: fillCopy(copyLocale, "noIntentFound", {
+        daily: policy.dailyBudgetUsd.toFixed(2),
+        spent: policy.spentTodayUsd.toFixed(2),
+        cap: policy.perTxCapUsd.toFixed(2),
+        frozen: policy.frozen ? translate(copyLocale, "agentFrozen") : translate(copyLocale, "agentOpen"),
+      }),
       risk_score: 5,
       policy_status: "PASS",
-      policy_reason: "No transaction intent was requested.",
+      policy_reason: translate(copyLocale, "noIntentPolicy"),
       intent: null,
     };
   }
@@ -1054,7 +1039,39 @@ function decideLocally(
   };
 }
 
+function invalidAmountDecision(userMessage: string, locale: ChatLocale): CopilotDecision | null {
+  if (isGeneralQuestion(userMessage)) return null;
+  const parsed = parseAmountToken(userMessage);
+  if (!parsed) return null;
+  const issue = amountIssue(parsed.amount, parsed.token);
+  if (!issue) return null;
+  const copyLocale = locale === "bn" || hasBengali(userMessage) ? "bn" : locale;
+  const explanation =
+    issue === "precision"
+      ? fillCopy(copyLocale, "tooManyDecimals", { asset: parsed.token, decimals: tokenDecimals(parsed.token) })
+      : translate(copyLocale, "invalidAmount");
+  return {
+    explanation,
+    risk_score: 10,
+    policy_status: "BLOCKED",
+    policy_reason: "INVALID_AMOUNT",
+    intent: null,
+  };
+}
+
+function injectionCopy(userMessage: string, intent: AegisIntent, locale: ChatLocale): string {
+  const parsed = parseAmountToken(userMessage);
+  const parsedOk = parsed && amountIssue(parsed.amount, parsed.token) == null;
+  return fillCopy(locale, "injectionBlocked", {
+    amount: parsedOk ? parsed.amount : intent.amount,
+    asset: parsedOk ? parsed.token : "USDT",
+    recipient: directedRecipient(userMessage) || intent.recipient,
+    tx: intent.amount_usd_estimate.toFixed(2),
+  });
+}
+
 function adversarialDecision(
+  userMessage: string,
   policy: ReturnType<typeof normalizePolicyContext>,
   balances: ReturnType<typeof normalizeBalancesContext>,
   locale: ChatLocale,
@@ -1071,12 +1088,12 @@ function adversarialDecision(
     confidential: false,
   };
   const preview = previewIntent(intent, policy, balances);
-  const explanation = translate(locale, "injectionBlocked");
+  const explanation = injectionCopy(userMessage, intent, locale);
   return {
     explanation,
     risk_score: 99,
     policy_status: "BLOCKED",
-    policy_reason: `AI firewall rejected the prompt injection. PROHORI_PER_TX_LIMIT_EXCEEDED PROHORI_DAILY_BUDGET_EXCEEDED. ${preview.warnings.join(" ")}`.trim(),
+    policy_reason: fillCopy(locale, "injectionReason", { details: preview.warnings.join(" ") }).trim(),
     intent,
   };
 }

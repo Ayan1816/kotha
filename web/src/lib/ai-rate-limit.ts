@@ -2,11 +2,13 @@ import { createHash } from "node:crypto";
 import { adminSessionValid } from "./admin-session";
 
 /** Anonymous callers share one bucket across chat and voice. */
-export const FREE_HOUR_LIMIT = 20;
-export const FREE_DAY_LIMIT = 100;
+export const FREE_HOUR_LIMIT = 30;
+export const FREE_DAY_LIMIT = 120;
 /** A connected wallet raises the hourly ceiling. The daily cap stays on the free tier. */
 export const WALLET_HOUR_LIMIT = 100;
 export const MAX_REPLY_TOKENS = 800;
+/** General questions do not need a long JSON action card. */
+export const GENERAL_QA_MAX_TOKENS = 400;
 
 export const FREE_LIMIT_MESSAGE = "Free limit reached. Connect your wallet to continue.";
 export const WALLET_LIMIT_MESSAGE = "Hourly limit reached. Try again in an hour.";

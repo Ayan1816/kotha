@@ -397,4 +397,33 @@ test("a Bengali over-limit explanation is built from i18n and keeps PROHORI code
   const prose = blocked.explanation.replace(/PROHORI_[A-Z0-9_]+/g, "").replace(/\bNEAR\b/g, "");
   assert.equal(/[A-Za-z]{3,}/.test(prose), false);
   assert.match(blocked.explanation, /1000/);
+  assert.match(blocked.explanation, /ডলার/);
+});
+
+test("negative, zero, and extra decimals are rejected in English and Bengali", () => {
+  const cases = [
+    ["Send -5 NEAR", "en"],
+    ["-৫ NEAR পাঠাও", "bn"],
+    ["Send 0 NEAR", "en"],
+    ["০ NEAR পাঠাও", "bn"],
+  ] as const;
+  for (const [message, locale] of cases) {
+    const decision = localCommandDecision(message, policy, nearBook, locale);
+    assert.equal(decision.intent, null, message);
+    assert.equal(decision.explanation, translate(locale, "invalidAmount"), message);
+  }
+  for (const [message, locale] of [
+    ["Send 1.123456789 USDT", "en"],
+    ["১.১২৩৪৫৬৭৮৯ USDT পাঠাও", "bn"],
+  ] as const) {
+    const decision = localCommandDecision(message, policy, nearBook, locale);
+    assert.equal(decision.intent, null, message);
+    assert.equal(decision.explanation, translate(locale, "tooManyDecimals").replace("{asset}", "USDT").replace("{decimals}", "6"), message);
+  }
+  const near = localCommandDecision("Send 1.123456789 NEAR to alice.testnet", policy, nearBook, "en");
+  assert.equal(near.intent?.amount, "1.123456789");
+  const banglaNear = localCommandDecision("alice.testnet কে ১.১২৩৪৫৬৭৮৯ NEAR পাঠাও", policy, nearBook, "bn");
+  assert.equal(banglaNear.intent?.amount, "1.123456789");
+  const tooFine = localCommandDecision(`Send 1.${"1".repeat(25)} NEAR to alice.testnet`, policy, nearBook, "en");
+  assert.equal(tooFine.intent, null);
 });

@@ -2,7 +2,11 @@ import fs from "fs";
 import { aegisStatePath, readTextFile, writeJsonFile } from "./aegis-paths";
 
 export const DEFAULT_CONTRACT_ID = "kotha-vault-1793945609.testnet";
-export const DEFAULT_RPC_URL = "https://rpc.testnet.near.org";
+export const FASTNEAR_TESTNET_RPC = "https://test.rpc.fastnear.com";
+export const PUBLIC_TESTNET_RPC = "https://rpc.testnet.near.org";
+export const DEFAULT_RPC_URL = FASTNEAR_TESTNET_RPC;
+export const VIEW_TIMEOUT_MS = 8_000;
+export const RPC_FAIL_CACHE_MS = 5_000;
 const LOG_FILE = "aegis-vault-executions.json";
 const ACTION_TYPES = ["swap", "transfer", "withdraw", "shield", "unshield"] as const;
 const SAMPLE_PREFIX = "aegis-corr-";
@@ -58,7 +62,16 @@ export function contractId(): string {
 }
 
 export function rpcUrl(): string {
-  return process.env.NEAR_RPC_URL || DEFAULT_RPC_URL;
+  return rpcCandidates()[0] || DEFAULT_RPC_URL;
+}
+
+/** Primary testnet RPC, then the other public endpoint. An explicit URL is used alone. */
+export function rpcCandidates(explicit?: string): string[] {
+  const pinned = explicit?.trim();
+  if (pinned) return [pinned];
+  const primary = (process.env.NEAR_RPC_URL || DEFAULT_RPC_URL).trim() || DEFAULT_RPC_URL;
+  const extras = [FASTNEAR_TESTNET_RPC, PUBLIC_TESTNET_RPC].filter((url) => url !== primary);
+  return [primary, ...extras];
 }
 
 export async function getVaultInfo(): Promise<VaultInfo> {
@@ -80,7 +93,7 @@ export async function getVaultInfo(): Promise<VaultInfo> {
     agentAccount: chain[1] || fallback.agentAccount,
     paused: Boolean(chain[2]),
     totalExecutions: Math.max(Number(chain[3]) || 0, local.executions.length),
-    source: "merged",
+    source: "chain",
   };
 }
 
@@ -97,7 +110,7 @@ export async function readExecutionRaw(correlationId: string): Promise<string | 
   try {
     return await callViewText("get_execution", { correlation_id: correlationId });
   } catch {
-    rpcFailUntil = Date.now() + 30_000;
+    noteRpcFailure();
     return null;
   }
 }
@@ -134,12 +147,16 @@ export function verificationCommands(record: VerifiedExecution): VerificationCom
   };
 }
 
+function noteRpcFailure(): void {
+  rpcFailUntil = Date.now() + RPC_FAIL_CACHE_MS;
+}
+
 async function tryChain<T>(method: string, args: Record<string, unknown>): Promise<T | null> {
   if (Date.now() < rpcFailUntil) return null;
   try {
     return await callView<T>(method, args);
   } catch {
-    rpcFailUntil = Date.now() + 30_000;
+    noteRpcFailure();
     return null;
   }
 }
@@ -150,8 +167,21 @@ async function callView<T>(method: string, args: Record<string, unknown>): Promi
   return JSON.parse(text) as T;
 }
 
-async function callViewText(method: string, args: Record<string, unknown>): Promise<string> {
-  const response = await fetch(rpcUrl(), {
+async function callViewText(method: string, args: Record<string, unknown>, explicitUrl?: string): Promise<string> {
+  const urls = rpcCandidates(explicitUrl);
+  let lastError: unknown = new Error("NEAR RPC failed.");
+  for (const url of urls) {
+    try {
+      return await callViewTextAt(url, method, args);
+    } catch (error) {
+      lastError = error;
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error("NEAR RPC failed.");
+}
+
+async function callViewTextAt(url: string, method: string, args: Record<string, unknown>): Promise<string> {
+  const response = await fetch(url, {
     method: "POST",
     headers: { "content-type": "application/json" },
     body: JSON.stringify({
@@ -166,7 +196,7 @@ async function callViewText(method: string, args: Record<string, unknown>): Prom
         args_base64: Buffer.from(JSON.stringify(args), "utf8").toString("base64"),
       },
     }),
-    signal: AbortSignal.timeout(2500),
+    signal: AbortSignal.timeout(VIEW_TIMEOUT_MS),
   });
   const payload = (await response.json()) as {
     error?: { message?: string };

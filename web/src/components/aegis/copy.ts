@@ -344,7 +344,17 @@ const en = {
   swapPreview: "Swap {amount} {origin} to {destination}. Expected output {out}. Max slippage {slippage} bps.",
   swapBlocked: "This swap is blocked by policy.",
   injectionBlocked:
-    "Prompt injection blocked. Kotha will not ignore spending limits or send all funds. The AI firewall returned BLOCKED with risk 99. PROHORI_PER_TX_LIMIT_EXCEEDED — This transaction is over the per-transaction limit. PROHORI_DAILY_BUDGET_EXCEEDED — This transaction is over the daily budget.",
+    "Prompt injection BLOCKED. Kotha will not send {amount} {asset} to {recipient} (~${tx}). PROHORI_PER_TX_LIMIT_EXCEEDED. PROHORI_DAILY_BUDGET_EXCEEDED.",
+  walletUnauthorized: "This wallet is not authorized on the vault",
+  vaultOwner: "Vault owner",
+  vaultAgent: "Vault agent",
+  typing: "Kotha is typing…",
+  tooManyDecimals: "{asset} allows {decimals} decimal places. Amount must use fewer decimal places.",
+  noIntentFound: "No executable intent was found. The owner policy allows ${daily} per day, ${spent} is already spent, and each transaction is capped at ${cap}{frozen}",
+  noIntentPolicy: "No transaction intent was requested.",
+  agentFrozen: ". The agent is frozen.",
+  agentOpen: ".",
+  injectionReason: "AI firewall rejected the prompt injection. PROHORI_PER_TX_LIMIT_EXCEEDED PROHORI_DAILY_BUDGET_EXCEEDED. {details}",
 } as const;
 
 export type CopyKey = keyof typeof en;
@@ -619,7 +629,7 @@ const bn: { [K in CopyKey]: string } = {
   voiceFallback: "ক্লাউড ট্রান্সক্রিপশন নেই। লাইভ ট্রান্সক্রিপ্ট ব্যবহার করা হচ্ছে।",
   voiceUnavailable: "ট্রান্সক্রিপশন সেবা নেই। কমান্ড টাইপ করুন।",
   goToGuard: "খরচ প্রহরীতে যান",
-  apiKeyTitle: "NEAR AI Cloud API কী",
+  apiKeyTitle: "NEAR AI ক্লাউড API কী",
   apiKeyServer: "সার্ভারের NEAR_AI_CLOUD_API_KEY সক্রিয়। নিজের sk-... কী শুধু এই ব্রাউজার সেশনে পাঠাতে চাইলে পেস্ট করুন।",
   apiKeySession: "এই ব্রাউজার সেশন আপনার সেভ করা NEAR AI কী পাঠাচ্ছে।",
   apiKeySave: "কী সংরক্ষণ",
@@ -679,8 +689,8 @@ const bn: { [K in CopyKey]: string } = {
   piiCard: "কার্ড",
   piiApiKey: "এপিআই কী",
   prohoriPerTx: "PROHORI_PER_TX_LIMIT_EXCEEDED: এই লেনদেন {tx} ডলার এবং প্রতি-লেনদেন সীমা {cap} ডলার।",
-  prohoriDaily: "PROHORI_DAILY_BUDGET_EXCEEDED: আজ খরচ {spent}, এই লেনদেন {tx}, প্রক্ষেপিত {projected}, দৈনিক সীমা {daily}।",
-  limitBlocked: "{amount} {asset} (~{tx}) {action} আটকানো হয়েছে। {details}",
+  prohoriDaily: "PROHORI_DAILY_BUDGET_EXCEEDED: আজ খরচ {spent} ডলার, এই লেনদেন {tx} ডলার, প্রক্ষেপিত {projected} ডলার, দৈনিক সীমা {daily} ডলার।",
+  limitBlocked: "{amount} {asset} (~{tx} ডলার) {action} আটকানো হয়েছে। {details}",
   nearSettles: "কারিগরি হিসাবে wNEAR (nep141:wrap.near)।",
   demoTestnet: "ডেমো (টেস্টনেট)",
   nativeNear: "নেটিভ NEAR ট্রান্সফার",
@@ -690,7 +700,17 @@ const bn: { [K in CopyKey]: string } = {
   swapPreview: "{amount} {origin} থেকে {destination} সোয়াপ। প্রত্যাশিত আউটপুট {out}। সর্বোচ্চ স্লিপেজ {slippage} bps।",
   swapBlocked: "নীতি এই সোয়াপ আটকেছে।",
   injectionBlocked:
-    "প্রম্পট-ইনজেকশন আটকানো হয়েছে। প্রহরী লিমিট ভোলা যাবে না। ৫০০ USDT attacker.near-এ পাঠানো ব্লক। PROHORI_PER_TX_LIMIT_EXCEEDED — এই লেনদেন প্রতি-লেনদেন সীমা ছাড়িয়েছে। PROHORI_DAILY_BUDGET_EXCEEDED — এই লেনদেন দৈনিক বাজেট ছাড়িয়েছে।",
+    "প্রম্পট ইনজেকশন আটকানো হয়েছে। {amount} {asset} {recipient}-এ (~{tx} ডলার) পাঠানো বন্ধ। PROHORI_PER_TX_LIMIT_EXCEEDED। PROHORI_DAILY_BUDGET_EXCEEDED।",
+  walletUnauthorized: "এই ওয়ালেট ভল্টে অনুমোদিত নয়",
+  vaultOwner: "ভল্টের মালিক",
+  vaultAgent: "ভল্ট এজেন্ট",
+  typing: "কথা লিখছে…",
+  tooManyDecimals: "{asset} সর্বোচ্চ {decimals} দশমিক ঘর নিতে পারে।",
+  noIntentFound: "কোনো চালানোর মতো ইনটেন্ট পাওয়া যায়নি। মালিকের নীতি দৈনিক {daily} ডলার, ইতিমধ্যে খরচ {spent} ডলার, প্রতি লেনদেনে সর্বোচ্চ {cap} ডলার{frozen}",
+  noIntentPolicy: "কোনো লেনদেনের ইনটেন্ট চাওয়া হয়নি।",
+  agentFrozen: "। এজেন্ট স্থগিত আছে।",
+  agentOpen: "।",
+  injectionReason: "এআই ফায়ারওয়াল প্রম্পট ইনজেকশন বাতিল করেছে (prompt injection)। PROHORI_PER_TX_LIMIT_EXCEEDED PROHORI_DAILY_BUDGET_EXCEEDED। {details}",
 };
 
 export function translate(lang: Lang, key: CopyKey): string {

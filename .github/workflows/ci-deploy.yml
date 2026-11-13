@@ -3,6 +3,8 @@ name: CI Deploy
 on:
   push:
     branches: [main]
+    paths:
+      - "contract/**"
   workflow_dispatch:
 
 permissions:
@@ -102,12 +104,21 @@ jobs:
                   "args_base64": base64.b64encode(b"{}").decode(),
               },
           }).encode()
-          req = urllib.request.Request(
-              "https://rpc.testnet.near.org",
-              data=body,
-              headers={"Content-Type": "application/json"},
-          )
-          data = json.loads(urllib.request.urlopen(req, timeout=30).read().decode())
+          data = None
+          last_error = None
+          for url in ("https://test.rpc.fastnear.com", "https://rpc.testnet.near.org"):
+              req = urllib.request.Request(
+                  url,
+                  data=body,
+                  headers={"Content-Type": "application/json"},
+              )
+              try:
+                  data = json.loads(urllib.request.urlopen(req, timeout=30).read().decode())
+                  break
+              except Exception as exc:
+                  last_error = exc
+          if data is None:
+              raise last_error
           info = json.loads(bytes(data["result"]["result"]).decode())
           print(info[3])
           PY

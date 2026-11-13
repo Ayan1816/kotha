@@ -1,8 +1,9 @@
 import { NextResponse } from "next/server";
-import { connectedWalletAccount, limitAiRequest } from "@/lib/ai-rate-limit";
+import { limitAiRequest } from "@/lib/ai-rate-limit";
 import { getAgentState, runDryRunPreview, type BalanceBook } from "@/lib/intents-agent";
-import { nearBalanceBook, unavailableBalanceContext, viewAccountYocto, walletBalanceContext } from "@/lib/near-balance";
-import { isTeeModel, normalizeChatLocale, pipelineTimeoutMs, readEnclaveTelemetry, runAttestedInference, TEE_MODELS, type ChatLocale } from "@/lib/near-ai-tee";
+import { isLocalChatPreview } from "@/lib/local-command";
+import { chatLocale, loadWalletChatBalance, runLocalChatTurn } from "@/lib/local-chat";
+import { isTeeModel, pipelineTimeoutMs, readEnclaveTelemetry, runAttestedInference, TEE_MODELS, type ChatLocale } from "@/lib/near-ai-tee";
 import type { LoaderStep } from "@/lib/chat-stream";
 
 type ChatBalance = { balancesContext: unknown; balanceBook: BalanceBook | null };
@@ -39,6 +40,22 @@ export async function POST(request: Request) {
       { status: 400 },
     );
   }
+  if (isLocalChatPreview(message)) {
+    const balance = await loadWalletChatBalance(request);
+    try {
+      const payload = await runLocalChatTurn({
+        message,
+        model: typeof record.model === "string" ? record.model : undefined,
+        autoRedact: record.autoRedact !== false,
+        locale: chatLocale(record.locale),
+        balancesContext: balance.balancesContext,
+        balanceBook: balance.balanceBook,
+      });
+      return NextResponse.json(payload);
+    } catch (error) {
+      return chatError(error);
+    }
+  }
   const limited = await limitAiRequest(request);
   if (!limited.ok) {
     return NextResponse.json({ error: { code: limited.code, message: limited.message } }, { status: 429 });
@@ -48,7 +65,7 @@ export async function POST(request: Request) {
     message,
     model: typeof record.model === "string" ? record.model : undefined,
     autoRedact: record.autoRedact !== false,
-    locale: normalizeChatLocale(record.locale),
+    locale: chatLocale(record.locale),
     apiKey: callerKey(request),
     balancesContext: balance.balancesContext,
     balanceBook: balance.balanceBook,
@@ -181,11 +198,7 @@ async function infer(
 }
 
 async function loadChatBalance(request: Request): Promise<ChatBalance> {
-  const account = connectedWalletAccount(request.headers.get("x-kotha-account"));
-  if (!account) return { balancesContext: unavailableBalanceContext(), balanceBook: null };
-  const yocto = await viewAccountYocto(account);
-  if (!yocto) return { balancesContext: unavailableBalanceContext(), balanceBook: null };
-  return { balancesContext: walletBalanceContext(account, yocto), balanceBook: nearBalanceBook(yocto) };
+  return loadWalletChatBalance(request);
 }
 
 function callerKey(request: Request): string | null {

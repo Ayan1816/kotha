@@ -2,7 +2,7 @@
 
 import { useKothaSession } from "@/app/providers";
 import { ApiKeyCard } from "@/components/aegis/api-key-card";
-import { DeckRequestError, fetchDashboard, fetchTeeCatalog, postAdminLock, postAdminUnlock, postDryRun, postExecute, postFreeze, postGrant, postPolicy, postSaveTx, postTeeChatStream, postTranslateMany } from "@/components/aegis/api";
+import { DeckRequestError, fetchDashboard, fetchTeeCatalog, postAdminLock, postAdminUnlock, postDryRun, postExecute, postFreeze, postGrant, postLocalPreview, postPolicy, postSaveTx, postTeeChatStream, postTranslateMany } from "@/components/aegis/api";
 import { ProofsTable, type ChainLink } from "@/components/aegis/audit-panel";
 import { CopilotPanel, isChipKey, usesFixedPreviewCopy, type ChatMessage } from "@/components/aegis/copilot-panel";
 import { translate, type Lang } from "@/components/aegis/copy";
@@ -14,6 +14,7 @@ import { ShimmerActionButton } from "@/components/ui/aegis-primitives";
 import { invalidAmountReason } from "@/lib/budget-math";
 import { acceptedTranslation, displayReply, withoutStaleSwapRefusals, type LoaderStep } from "@/lib/chat-stream";
 import { selectArmedQuote } from "@/lib/guard-quote";
+import { isLocalChatPreview } from "@/lib/local-command";
 import { isLocalPreview, overallTeePhase } from "@/lib/tee-status";
 import { resolveRemittance } from "@/lib/phone-resolver";
 import {
@@ -85,12 +86,19 @@ export function CommandDeck() {
   balanceReader.current = near.getBalance;
   const translateFlight = useRef(new Set<string>());
   const dryTicket = useRef(0);
+  const chatQueue = useRef<Array<{ text: string; chipKey?: string; existingId: string }>>([]);
+  const chatActive = useRef(false);
 
   const frozen = dashboard?.agentState.frozen ?? dashboard?.agentState.policy.frozen ?? false;
   const accountId = (near.signedAccountId || "").trim();
   const admin = dashboard?.admin === true;
   const ownerConfigured = strictOwnerMode() && configuredOwnerId().length > 0;
-  const ownerLock = !admin && ownerConfigured && accountId !== configuredOwnerId() ? translate(lang, "connectOwner") : null;
+  const vaultInfo = dashboard?.vaultInfo;
+  const chainKnown = vaultInfo?.source === "chain";
+  const chainOwner = chainKnown ? vaultInfo.owner.trim() : "";
+  const chainAgent = chainKnown ? vaultInfo.agentAccount.trim() : "";
+  const policyOwnerId = chainKnown ? chainOwner : ownerConfigured ? configuredOwnerId() : "";
+  const ownerLock = !admin && policyOwnerId.length > 0 && accountId !== policyOwnerId ? translate(lang, "connectOwner") : null;
   const grantNotice = admin || accountId ? null : translate(lang, "grantLocked");
   const thinking = busy === "chat";
 
@@ -162,30 +170,35 @@ export function CommandDeck() {
       return !translateFlight.current.has(`${message.id}:${lang}`);
     });
     if (pending.length === 0) return;
-    const keys = pending.map((message) => `${message.id}:${lang}`);
-    for (const key of keys) translateFlight.current.add(key);
     const target = lang;
-    setMessages((current) => current.map((message) => (pending.some((item) => item.id === message.id) ? { ...message, translating: true } : message)));
-    void postTranslateMany({ texts: pending.map((message) => message.text), target, accountId })
-      .then((texts) => pending.map((message, index) => ({ id: message.id, text: texts[index] || "", failed: !texts[index] })))
-      .catch(() => pending.map((message) => ({ id: message.id, text: "", failed: true })))
-      .then((results) => {
-        for (const key of keys) translateFlight.current.delete(key);
-        setMessages((current) =>
-          current.map((message) => {
-            const found = results.find((item) => item.id === message.id);
-            if (!found) return message;
-            const accepted = acceptedTranslation(found.failed ? "" : found.text);
-            if (!accepted) return { ...message, translating: false, translationFailed: true };
-            return {
-              ...message,
-              translating: false,
-              translationFailed: false,
-              translations: { ...message.translations, [target]: accepted },
-            };
-          }),
-        );
-      });
+    const chunks: ChatMessage[][] = [];
+    for (let index = 0; index < pending.length; index += 2) chunks.push(pending.slice(index, index + 2));
+    for (const chunk of chunks) {
+      const keys = chunk.map((message) => `${message.id}:${target}`);
+      for (const key of keys) translateFlight.current.add(key);
+      const ids = new Set(chunk.map((message) => message.id));
+      setMessages((current) => current.map((message) => (ids.has(message.id) ? { ...message, translating: true } : message)));
+      void translateChunk(chunk.map((message) => message.text), target, accountId)
+        .then((texts) => chunk.map((message, index) => ({ id: message.id, text: texts[index] || "", failed: !texts[index] })))
+        .catch(() => chunk.map((message) => ({ id: message.id, text: "", failed: true })))
+        .then((results) => {
+          for (const key of keys) translateFlight.current.delete(key);
+          setMessages((current) =>
+            current.map((message) => {
+              const found = results.find((item) => item.id === message.id);
+              if (!found) return message;
+              const accepted = acceptedTranslation(found.failed ? "" : found.text);
+              if (!accepted) return { ...message, translating: false, translationFailed: true, text: message.text };
+              return {
+                ...message,
+                translating: false,
+                translationFailed: false,
+                translations: { ...message.translations, [target]: accepted },
+              };
+            }),
+          );
+        });
+    }
   }, [accountId, lang, messages, messagesReady]);
 
   useEffect(() => {
@@ -274,8 +287,8 @@ export function CommandDeck() {
 
   function retryMessage(id: string) {
     const message = messages.find((item) => item.id === id);
-    if (!message || message.role !== "user" || thinking) return;
-    void send(message.text, message.chipKey, id);
+    if (!message || message.role !== "user") return;
+    enqueueChat(message.text, message.chipKey, id);
   }
 
   function retryTranslation(id: string) {
@@ -286,21 +299,49 @@ export function CommandDeck() {
     );
   }
 
-  async function send(text: string, chipKey?: string, existingId?: string) {
+  function enqueueChat(text: string, chipKey?: string, existingId?: string) {
     const id = existingId || crypto.randomUUID();
-    setQuote(null);
-    setQuoteError(null);
-    setChatStep("redacting");
-    void refreshRemittance(text);
-    setLiveText("");
     if (!existingId) {
       setMessages((current) => [
         ...current,
         { id, role: "user", lang: textLang(text, lang), text, chipKey: isChipKey(chipKey) ? chipKey : undefined },
       ]);
     }
+    chatQueue.current.push({ text, chipKey, existingId: id });
+    if (chatActive.current) return;
+    chatActive.current = true;
+    void drainChat();
+  }
+
+  async function drainChat() {
+    try {
+      while (chatQueue.current.length > 0) {
+        const next = chatQueue.current.shift();
+        if (!next) break;
+        await deliverChat(next.text);
+      }
+    } finally {
+      chatActive.current = false;
+      if (chatQueue.current.length > 0) {
+        chatActive.current = true;
+        void drainChat();
+      }
+    }
+  }
+
+  async function deliverChat(text: string) {
+    setQuote(null);
+    setQuoteError(null);
+    setChatStep("thinking");
+    setLiveText("");
+    setBusy("chat");
+    void refreshRemittance(text);
     try {
       const result = await run("chat", async () => {
+        if (isLocalChatPreview(text)) {
+          setChatStep("thinking");
+          return postLocalPreview({ message: text, model, autoRedact, locale: lang, accountId });
+        }
         return postTeeChatStream(
           { message: text, model, autoRedact, locale: lang, accountId },
           {
@@ -373,6 +414,10 @@ export function CommandDeck() {
     }
   }
 
+  function send(text: string, chipKey?: string, existingId?: string) {
+    enqueueChat(text, chipKey, existingId);
+  }
+
   function chooseLang(next: Lang) {
     setLang(next);
     try {
@@ -382,14 +427,25 @@ export function CommandDeck() {
     }
   }
 
+  function accountMayExecute(account: string): boolean {
+    if (admin) return true;
+    if (chainKnown) return account.length > 0 && (account === chainOwner || account === chainAgent);
+    if (!ownerConfigured) return true;
+    return account === configuredOwnerId();
+  }
+
   async function ownerProof(action: string, payload: Record<string, unknown>) {
     if (admin) return null;
     const account = (near.signedAccountId || "").trim();
     if (!account) {
-      if (ownerConfigured) throw new Error(translate(lang, "connectOwner"));
+      if (ownerConfigured || chainKnown) throw new Error(translate(lang, "connectOwner"));
       return null;
     }
-    if (ownerConfigured && account !== configuredOwnerId()) throw new Error(translate(lang, "connectOwner"));
+    if (action === "execute") {
+      if (!accountMayExecute(account)) throw new Error(translate(lang, "walletUnauthorized"));
+    } else if (policyOwnerId && account !== policyOwnerId) {
+      throw new Error(translate(lang, "connectOwner"));
+    }
     const sessionOwner = proofUsesSessionOwner(account, { sessionOwnerOptIn: !strictOwnerMode() });
     return createWalletProof((params) => near.signNEP413Message(params), action, payload, Date.now(), sessionOwner);
   }
@@ -555,7 +611,11 @@ export function CommandDeck() {
     if (intentId) setQuote(armed);
     try {
       const account = (near.signedAccountId || "").trim();
-      if (!admin && ownerConfigured && account !== configuredOwnerId()) {
+      if (!admin && !accountMayExecute(account)) {
+        setNotice(account ? translate(lang, "walletUnauthorized") : translate(lang, "connectOwner"));
+        return;
+      }
+      if (!admin && !account && (ownerConfigured || chainKnown)) {
         setNotice(translate(lang, "connectOwner"));
         return;
       }
@@ -646,7 +706,8 @@ export function CommandDeck() {
 
   const grant = dashboard?.agentState.grant;
   const reason = ownerLock || quoteError || blockReason(lang, frozen, grant, quote);
-  const ownerReady = admin || (Boolean(accountId) && (!ownerConfigured || accountId === configuredOwnerId()));
+  const executeReady = admin || (Boolean(accountId) && accountMayExecute(accountId));
+  const executeHint = !executeReady && accountId ? translate(lang, "walletUnauthorized") : null;
 
   const tabs: Array<{ id: TabId; key: "tabChat" | "tabGuard" | "tabProofs" | "tabSettings" }> = [
     { id: "chat", key: "tabChat" },
@@ -728,7 +789,8 @@ export function CommandDeck() {
             frozen={frozen}
             teePhase={overallTeePhase(messages)}
             accountId={accountId}
-            ownerReady={ownerReady}
+            ownerReady={executeReady}
+            executeHint={executeHint}
             walletConnected={Boolean(accountId)}
             nearBalance={accountId ? nearBalance : null}
             onAutoRedact={setAutoRedact}
@@ -746,7 +808,10 @@ export function CommandDeck() {
             policy={dashboard.agentState.policy}
             frozen={frozen}
             ownerLock={ownerLock}
-            ownerReady={ownerReady}
+            ownerReady={executeReady}
+            executeHint={executeHint}
+            vaultOwner={vaultInfo?.owner || ""}
+            vaultAgent={vaultInfo?.agentAccount || ""}
             quoteBusy={busy === "quote"}
             executeBusy={busy === "execute"}
             freezeBusy={busy === "freeze"}
@@ -772,6 +837,11 @@ export function CommandDeck() {
         ) : null}
         {dashboard && tab === "settings" ? (
           <div className="space-y-4">
+            <p className="break-words text-sm text-white/70">
+              {translate(lang, "vaultOwner")}: {vaultInfo?.owner || "—"}
+              {" · "}
+              {translate(lang, "vaultAgent")}: {vaultInfo?.agentAccount || "—"}
+            </p>
             <ApiKeyCard lang={lang} />
             <AdminModeCard
               lang={lang}
@@ -865,6 +935,19 @@ function AdminModeCard({
       )}
     </section>
   );
+}
+
+async function translateChunk(texts: string[], target: "bn" | "en", accountId: string): Promise<string[]> {
+  let last: unknown;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, 400 * 2 ** (attempt - 1)));
+    try {
+      return await postTranslateMany({ texts, target, accountId });
+    } catch (error) {
+      last = error;
+    }
+  }
+  throw last instanceof Error ? last : new Error("Translation failed.");
 }
 
 function aiLimitCode(error: unknown): string {

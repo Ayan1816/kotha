@@ -152,27 +152,31 @@ export async function translateMany(args: Omit<TranslateArgs, "text"> & { texts:
   if (missing.length === 0) {
     return texts.map((text) => successCache.get(cacheKey(args.target, text)) ?? "");
   }
-  if (missing.length === 1) {
-    const only = await translateText({ ...args, text: missing[0] });
-    successCache.set(cacheKey(args.target, missing[0]), only);
-    return texts.map((text) => successCache.get(cacheKey(args.target, text)) ?? only);
-  }
-  const flattened = missing.map((text) => text.replace(/\s*\n+\s*/g, " ").trim());
-  const prompt = flattened.map((text, index) => `[${index}] ${text}`).join("\n");
-  try {
-    const raw = await translateText({ ...args, text: prompt });
-    const parsed = parseNumbered(raw, missing.length);
-    if (parsed) {
-      missing.forEach((text, index) => successCache.set(cacheKey(args.target, text), parsed[index]));
-      return texts.map((text) => successCache.get(cacheKey(args.target, text)) ?? "");
+  const chunkSize = 2;
+  for (let offset = 0; offset < missing.length; offset += chunkSize) {
+    const slice = missing.slice(offset, offset + chunkSize);
+    if (slice.length === 1) {
+      const only = await translateText({ ...args, text: slice[0] });
+      successCache.set(cacheKey(args.target, slice[0]), only);
+      continue;
     }
-  } catch {
-    // Fall through to any line already cached, then one request per miss.
-  }
-  for (const text of missing) {
-    if (successCache.has(cacheKey(args.target, text))) continue;
-    const translated = await translateText({ ...args, text });
-    successCache.set(cacheKey(args.target, text), translated);
+    const flattened = slice.map((text) => text.replace(/\s*\n+\s*/g, " ").trim());
+    const prompt = flattened.map((text, index) => `[${index}] ${text}`).join("\n");
+    try {
+      const raw = await translateText({ ...args, text: prompt });
+      const parsed = parseNumbered(raw, slice.length);
+      if (parsed) {
+        slice.forEach((text, index) => successCache.set(cacheKey(args.target, text), parsed[index]));
+        continue;
+      }
+    } catch {
+      // One request per remaining line in this chunk.
+    }
+    for (const text of slice) {
+      if (successCache.has(cacheKey(args.target, text))) continue;
+      const translated = await translateText({ ...args, text });
+      successCache.set(cacheKey(args.target, text), translated);
+    }
   }
   return texts.map((text) => {
     const found = successCache.get(cacheKey(args.target, text));

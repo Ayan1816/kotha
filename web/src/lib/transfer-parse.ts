@@ -40,12 +40,36 @@ export function invalidDirectedAccount(text: string): string {
   return token;
 }
 
+const TOKEN_DECIMALS: Record<string, number> = {
+  NEAR: 24,
+  wNEAR: 24,
+  USDT: 6,
+  USDC: 6,
+};
+
+export type AmountIssue = "negative" | "zero" | "precision";
+
 export function parseAmountToken(message: string): { amount: string; token: string } | null {
   const folded = foldDigits(message);
-  const amountMatch = folded.match(/([0-9]+(?:\.[0-9]+)?)\s*(usdc|usdt|near|wnear)\b/i);
+  const amountMatch = folded.match(/(?:^|[^\d.-])(-?[0-9]+(?:\.[0-9]+)?)\s*(usdc|usdt|near|wnear)\b/i);
   if (!amountMatch?.[1] || !amountMatch[2]) return null;
   const token = amountMatch[2].toLowerCase() === "wnear" ? "wNEAR" : amountMatch[2].toUpperCase();
   return { amount: amountMatch[1].replace(/,/g, ""), token };
+}
+
+export function tokenDecimals(token: string): number {
+  return TOKEN_DECIMALS[token] ?? 24;
+}
+
+/** User-entered amounts. Extra fractional digits are rejected here, not inside atomic conversion. */
+export function amountIssue(amount: string, token: string): AmountIssue | null {
+  const raw = amount.trim().replace(/,/g, "");
+  if (raw.startsWith("-")) return "negative";
+  if (!/^[0-9]+(?:\.[0-9]+)?$/.test(raw)) return null;
+  if (/^0+(?:\.0+)?$/.test(raw)) return "zero";
+  const fraction = raw.split(".")[1] ?? "";
+  if (fraction.length > tokenDecimals(token)) return "precision";
+  return null;
 }
 
 export function parseTransferCommand(message: string): ParsedTransfer | null {

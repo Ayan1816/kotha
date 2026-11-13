@@ -89,6 +89,21 @@ describe("NEP-413 owner proof", () => {
     assert.equal(called, false);
   });
 
+  it("accepts the on-chain agent when the owner id is different", async () => {
+    const payload = { intent: { action: "execute", amount: "1" } };
+    const agent = "mohin12.testnet";
+    const { proof, publicKey } = await signed("execute", payload, NOW, agent);
+    await requireOwnerProof({
+      proof,
+      action: "execute",
+      payload,
+      now: NOW,
+      ownerId: OWNER,
+      allowedAccounts: [OWNER, agent],
+      fetchImpl: rpc(publicKey),
+    });
+  });
+
   it("rejects an empty owner id", async () => {
     const payload = {};
     const { proof, publicKey } = await signed("rotate_grant", payload);

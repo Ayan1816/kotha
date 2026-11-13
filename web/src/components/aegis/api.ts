@@ -32,6 +32,10 @@ async function readJson(response: Response): Promise<unknown> {
 
 function fail(data: unknown, status: number): DeckRequestError {
   const body = (data ?? {}) as ApiErrorBody;
+  if (status === 429) {
+    const code = body.error?.code === "wallet_limit" ? "wallet_limit" : "free_limit";
+    return new DeckRequestError(code, body.error?.message || "", body.error?.preview ?? null);
+  }
   return new DeckRequestError(
     body.error?.code || "request_failed",
     body.error?.message || `Request failed (${status}).`,
@@ -140,12 +144,34 @@ export async function postTranslateMany(body: { texts: string[]; target: "bn" | 
   });
   const data = await readJson(response);
   if (!response.ok) throw fail(data, response.status);
+  if (isRecord(data) && data.fallback === true) {
+    throw new DeckRequestError("translate_failed", "Translation failed.");
+  }
   if (!isRecord(data) || !Array.isArray(data.texts) || data.texts.length !== texts.length) {
     throw new DeckRequestError("translate_failed", "Translation failed.");
   }
   const translated = data.texts.map((item) => (typeof item === "string" ? item.trim() : ""));
   if (translated.some((item) => !item)) throw new DeckRequestError("translate_failed", "Translation failed.");
   return translated;
+}
+
+export async function postLocalPreview(body: {
+  message: string;
+  model: string;
+  autoRedact: boolean;
+  locale?: string;
+  accountId?: string;
+}): Promise<TeeChatResponse> {
+  const { accountId, ...payload } = body;
+  const response = await fetch("/api/local-preview", {
+    method: "POST",
+    credentials: "include",
+    headers: aiHeaders({ "content-type": "application/json" }, accountId),
+    body: JSON.stringify(payload),
+  });
+  const data = await readJson(response);
+  if (!response.ok) throw fail(data, response.status);
+  return readTeeChat(data);
 }
 
 export async function postTeeChatStream(
