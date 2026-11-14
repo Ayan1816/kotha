@@ -1048,7 +1048,7 @@ function resolveArmed(intentId?: string): { id: string; intent: AegisIntent; att
   ];
 
   return (
-    <div className="min-h-screen bg-[#05070b]">
+    <div className="kotha-app bg-[#05070b]">
       <TelemetryBar lang={lang} onLang={chooseLang} admin={admin} />
       <main className="mx-auto w-full max-w-[1200px] px-6 pb-6 pt-[88px]">
         {frozen ? (

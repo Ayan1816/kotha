@@ -47,6 +47,7 @@ html {
 
 body {
   min-height: 100vh;
+  min-height: 100dvh;
   background: var(--aegis-bg);
   color: var(--aegis-fg);
   font-family: var(--font-sans), "Noto Sans Bengali", "Hind Siliguri", sans-serif;
@@ -121,5 +122,40 @@ body {
   .aegis-shimmer,
   .aegis-spin {
     animation: none;
+  }
+}
+
+/* Chat screen: 100vh for older browsers, 100dvh where the dynamic viewport exists. */
+.chat-screen {
+  min-height: calc(100vh - 11rem);
+  min-height: calc(100dvh - 11rem);
+}
+
+.chat-screen-body {
+  min-height: calc(100vh - 14rem);
+  min-height: calc(100dvh - 14rem);
+}
+
+.kotha-app {
+  min-height: 100vh;
+  min-height: 100dvh;
+}
+
+/* Composer sits above the Android gesture bar. Existing inset is 1rem (p-4). */
+.chat-composer {
+  padding-bottom: calc(1rem + env(safe-area-inset-bottom, 0px));
+}
+
+.chat-log {
+  padding-bottom: 1rem;
+}
+
+@media (max-width: 639px) {
+  .chat-composer {
+    padding-bottom: calc(1rem + max(12px, env(safe-area-inset-bottom, 0px)));
+  }
+
+  .chat-log {
+    padding-bottom: calc(1rem + 12px + env(safe-area-inset-bottom, 0px));
   }
 }

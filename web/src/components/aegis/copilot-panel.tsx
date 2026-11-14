@@ -388,14 +388,14 @@ export function CopilotPanel({
         : "border-[#FF8A00]/50 bg-[#FF8A00]/15 text-[#ffd7a1]";
 
   return (
-    <div className="flex min-h-[calc(100dvh-11rem)] flex-col gap-2">
+    <div className="chat-screen flex flex-col gap-2">
       <div className="flex justify-end">
         <span title={teeLabel} className={cn("max-w-full rounded-full border px-3 py-1 text-sm", teeClass)}>
           {teeLabel}
         </span>
       </div>
       <SpotlightGlassCard alert={frozen} className="flex min-h-0 flex-1 flex-col">
-      <div className="flex h-full min-h-[calc(100dvh-14rem)] flex-col">
+      <div className="chat-screen-body flex h-full flex-col">
         <details className="border-b border-white/10 px-4 py-3">
           <summary className="cursor-pointer text-sm text-[#b8ffe0]">{translate(lang, "showDetails")}</summary>
           <div className="mt-4 flex flex-wrap items-center justify-between gap-3" title={translate(lang, "autoRedactHint")}>
@@ -423,7 +423,7 @@ export function CopilotPanel({
           </div>
         </details>
 
-        <div ref={scroller} className="min-h-0 flex-1 space-y-3 overflow-y-auto px-4 py-4" aria-live="polite">
+        <div ref={scroller} className="chat-log min-h-0 flex-1 space-y-3 overflow-y-auto px-4 pt-4" aria-live="polite">
           {messages.length === 0 && !thinking ? (
             <div className="mx-auto flex min-h-[50vh] w-full max-w-lg flex-col items-center justify-center">
             <div className="w-full rounded-2xl border border-white/10 bg-black/30 p-4">
@@ -503,7 +503,7 @@ export function CopilotPanel({
           </div>
         </div>
         <form
-          className="mt-auto border-t border-white/10 p-4"
+          className="chat-composer mt-auto border-t border-white/10 px-4 pt-4"
           onSubmit={(event) => {
             event.preventDefault();
             submit(input);
